@@ -7,6 +7,28 @@ export interface ExecOptions {
   timeoutMs?: number;
 }
 
+export type VaultContentPredicate = (content: string) => boolean | Promise<boolean>;
+
+export interface VaultWaitForContentOptions extends WaitForOptions {}
+
+export interface VaultWriteOptions {
+  waitForContent?: boolean | VaultContentPredicate;
+  waitOptions?: VaultWaitForContentOptions;
+}
+
+export type PluginDataPredicate<T = unknown> = (data: T) => boolean | Promise<boolean>;
+
+export interface PluginWaitForDataOptions extends WaitForOptions {}
+
+export interface PluginWaitUntilReadyOptions extends WaitForOptions {
+  commandId?: string;
+}
+
+export interface PluginReloadOptions extends ExecOptions {
+  readyOptions?: PluginWaitUntilReadyOptions;
+  waitUntilReady?: boolean;
+}
+
 export interface ExecResult {
   argv: string[];
   command: string;
@@ -77,8 +99,13 @@ export interface PluginHandle {
   disable(options?: PluginToggleOptions): Promise<void>;
   enable(options?: PluginToggleOptions): Promise<void>;
   isEnabled(): Promise<boolean>;
-  reload(): Promise<void>;
+  reload(options?: PluginReloadOptions): Promise<void>;
   restoreData(): Promise<void>;
+  waitForData<T = unknown>(
+    predicate: PluginDataPredicate<T>,
+    options?: PluginWaitForDataOptions,
+  ): Promise<T>;
+  waitUntilReady(options?: PluginWaitUntilReadyOptions): Promise<void>;
 }
 
 export interface ObsidianAppHandle {
@@ -153,6 +180,7 @@ export interface ObsidianClient {
   open(options: OpenFileOptions, execOptions?: ExecOptions): Promise<void>;
   openTab(options?: OpenTabOptions, execOptions?: ExecOptions): Promise<void>;
   plugin(id: string): PluginHandle;
+  sleep(ms: number): Promise<void>;
   tabs(options?: TabsOptions, execOptions?: ExecOptions): Promise<WorkspaceTab[]>;
   vaultPath(): Promise<string>;
   verify(): Promise<void>;
@@ -165,6 +193,7 @@ export interface ObsidianClient {
 
 export interface CreateObsidianClientOptions {
   bin?: string;
+  defaultExecOptions?: ExecOptions;
   intervalMs?: number;
   timeoutMs?: number;
   transport?: CommandTransport;
@@ -181,9 +210,14 @@ export interface VaultApi {
   json<T = unknown>(path: string): JsonFile<T>;
   mkdir(path: string): Promise<void>;
   read(path: string): Promise<string>;
+  waitForContent(
+    path: string,
+    predicate: VaultContentPredicate,
+    options?: VaultWaitForContentOptions,
+  ): Promise<string>;
   waitForExists(path: string, options?: WaitForOptions): Promise<void>;
   waitForMissing(path: string, options?: WaitForOptions): Promise<void>;
-  write(path: string, content: string): Promise<void>;
+  write(path: string, content: string, options?: VaultWriteOptions): Promise<void>;
 }
 
 export interface SandboxApi extends VaultApi {

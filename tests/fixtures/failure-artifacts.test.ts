@@ -5,13 +5,13 @@ import path from "node:path";
 import { afterEach, describe, expect, test } from "vite-plus/test";
 import type { OnTestFailedHandler } from "vite-plus/test";
 
-import { createPluginHandle } from "../../src/core/plugin";
 import {
+  captureFailureArtifacts,
   getFailureArtifactConfig,
   getFailureArtifactDirectory,
-  registerFailureArtifacts,
-  registerPluginFailureArtifacts,
-} from "../../src/fixtures/failure-artifacts";
+} from "../../src/artifacts/failure-artifacts";
+import { createPluginHandle } from "../../src/core/plugin";
+import { registerFailureArtifacts } from "../../src/fixtures/failure-artifacts";
 import { createStubObsidianClient } from "../helpers/stub-obsidian-client";
 
 const tempDirectories: string[] = [];
@@ -104,7 +104,7 @@ describe("failure artifacts", () => {
     );
   });
 
-  test("captures plugin data on failure", async () => {
+  test("captures plugin data through the standalone API", async () => {
     const artifactsDir = await createTempDir("obsidian-e2e-plugin-artifacts-");
     const vaultRoot = await createTempDir("obsidian-e2e-plugin-vault-");
     const pluginDataPath = path.join(vaultRoot, ".obsidian", "plugins", "quickadd", "data.json");
@@ -118,29 +118,18 @@ describe("failure artifacts", () => {
     });
     const plugin = client.plugin("quickadd");
 
-    let failureHook: (() => Promise<void>) | undefined;
-    const failureContext = {
-      task: {
+    await captureFailureArtifacts(
+      {
         id: "file_test_a1b2c3d4",
         name: "captures plugin data",
       },
-    };
-
-    registerPluginFailureArtifacts(
-      {
-        onTestFailed(fn: OnTestFailedHandler) {
-          failureHook = () => Promise.resolve(fn(failureContext as never));
-        },
-        task: failureContext.task,
-      } as never,
-      plugin,
+      client,
       {
         artifactsDir,
         captureOnFailure: true,
+        plugin,
       },
     );
-
-    await failureHook?.();
 
     await expect(
       fs.readFile(

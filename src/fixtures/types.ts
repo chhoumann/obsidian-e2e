@@ -1,3 +1,4 @@
+import type { FailureArtifactOptions } from "../artifacts/failure-artifacts";
 import type {
   CreateObsidianClientOptions,
   ObsidianClient,
@@ -7,15 +8,6 @@ import type {
   VaultApi,
 } from "../core/types";
 import type { TestAPI } from "vite-plus/test";
-
-export interface FailureArtifactOptions {
-  activeFile?: boolean;
-  dom?: boolean;
-  editorText?: boolean;
-  screenshot?: boolean;
-  tabs?: boolean;
-  workspace?: boolean;
-}
 
 export interface SharedVaultLockOptions {
   heartbeatMs?: number;

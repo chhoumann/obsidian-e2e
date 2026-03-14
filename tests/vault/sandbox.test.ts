@@ -5,6 +5,7 @@ import { afterEach, describe, expect, test } from "vite-plus/test";
 
 import { createSandboxApi } from "../../src/vault/sandbox";
 import { createVaultApi } from "../../src/vault/vault";
+import { waitForValue } from "../../src/core/wait";
 import type { ObsidianClient } from "../../src/core/types";
 import { createStubObsidianClient } from "../helpers/stub-obsidian-client";
 
@@ -32,6 +33,67 @@ describe("createVaultApi", () => {
     await expect(
       fs.readFile(path.join(vaultRoot, "__obsidian_e2e__", "case-a", "note.md"), "utf8"),
     ).resolves.toBe("hello");
+  });
+
+  test("waits for content updates through the shared polling helper", async () => {
+    const vaultRoot = await createVaultRoot();
+    const vault = createVaultApi({
+      obsidian: createPollingStubClient(vaultRoot),
+      root: "__obsidian_e2e__/case-b",
+    });
+    const notePath = path.join(vaultRoot, "__obsidian_e2e__", "case-b", "note.md");
+
+    await fs.mkdir(path.dirname(notePath), { recursive: true });
+    await fs.writeFile(notePath, "pending", "utf8");
+
+    setTimeout(() => {
+      void fs.writeFile(notePath, "ready", "utf8");
+    }, 5);
+
+    await expect(
+      vault.waitForContent("note.md", (content) => content === "ready", {
+        intervalMs: 1,
+        timeoutMs: 50,
+      }),
+    ).resolves.toBe("ready");
+  });
+
+  test("includes the vault path in waitForContent timeout errors", async () => {
+    const vaultRoot = await createVaultRoot();
+    const vault = createVaultApi({
+      obsidian: createPollingStubClient(vaultRoot),
+      root: "__obsidian_e2e__/case-c",
+    });
+
+    await expect(
+      vault.waitForContent("note.md", () => false, {
+        intervalMs: 1,
+        timeoutMs: 5,
+      }),
+    ).rejects.toMatchObject({
+      message: expect.stringContaining(
+        'vault path "__obsidian_e2e__/case-c/note.md" to match content',
+      ),
+    });
+  });
+
+  test("can wait for written content to become observable", async () => {
+    const vaultRoot = await createVaultRoot();
+    const vault = createVaultApi({
+      obsidian: createPollingStubClient(vaultRoot),
+      root: "__obsidian_e2e__/case-d",
+    });
+
+    await expect(
+      vault.write("note.md", "hello", {
+        waitForContent: true,
+        waitOptions: {
+          intervalMs: 1,
+          timeoutMs: 25,
+        },
+      }),
+    ).resolves.toBeUndefined();
+    await expect(vault.read("note.md")).resolves.toBe("hello");
   });
 });
 
@@ -65,4 +127,11 @@ async function createVaultRoot(): Promise<string> {
 
 function createStubClient(vaultRoot: string): ObsidianClient {
   return createStubObsidianClient({ vaultRoot });
+}
+
+function createPollingStubClient(vaultRoot: string): ObsidianClient {
+  return createStubObsidianClient({
+    vaultRoot,
+    waitFor: (callback, options) => waitForValue(callback, options),
+  });
 }

@@ -1,8 +1,15 @@
 import { access, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { posix as pathPosix } from "node:path";
 
-import type { DeleteOptions, JsonFile, ObsidianClient, VaultApi } from "../core/types";
+import type {
+  DeleteOptions,
+  JsonFile,
+  ObsidianClient,
+  VaultApi,
+  VaultWaitForContentOptions,
+  VaultWriteOptions,
+} from "../core/types";
+import { normalizeScope, resolveFilesystemPath, resolveVaultPath } from "./paths";
 
 interface CreateVaultApiOptions {
   obsidian: ObsidianClient;
@@ -67,6 +74,22 @@ export function createVaultApi(options: CreateVaultApiOptions): VaultApi {
       const resolvedPath = await resolveFilesystemPath(options.obsidian, scopeRoot, targetPath);
       return readFile(resolvedPath, "utf8");
     },
+    async waitForContent(targetPath, predicate, waitOptions: VaultWaitForContentOptions = {}) {
+      return options.obsidian.waitFor(
+        async () => {
+          try {
+            const content = await this.read(targetPath);
+            return (await predicate(content)) ? content : false;
+          } catch {
+            return false;
+          }
+        },
+        {
+          message: `vault path "${resolveVaultPath(scopeRoot, targetPath)}" to match content`,
+          ...waitOptions,
+        },
+      );
+    },
     async waitForExists(targetPath, waitOptions) {
       await options.obsidian.waitFor(async () => ((await this.exists(targetPath)) ? true : false), {
         message: `vault path "${resolveVaultPath(scopeRoot, targetPath)}" to exist`,
@@ -79,47 +102,21 @@ export function createVaultApi(options: CreateVaultApiOptions): VaultApi {
         ...waitOptions,
       });
     },
-    async write(targetPath, content) {
+    async write(targetPath, content, writeOptions: VaultWriteOptions = {}) {
       const resolvedPath = await resolveFilesystemPath(options.obsidian, scopeRoot, targetPath);
       await mkdir(path.dirname(resolvedPath), { recursive: true });
       await writeFile(resolvedPath, content, "utf8");
+
+      if (!writeOptions.waitForContent) {
+        return;
+      }
+
+      const predicate =
+        typeof writeOptions.waitForContent === "function"
+          ? writeOptions.waitForContent
+          : (value: string) => value === content;
+
+      await this.waitForContent(targetPath, predicate, writeOptions.waitOptions);
     },
   };
-}
-
-function normalizeScope(scope?: string): string {
-  if (!scope || scope === ".") {
-    return "";
-  }
-
-  return scope.replace(/^\/+|\/+$/g, "");
-}
-
-function resolveVaultPath(scopeRoot: string, targetPath: string): string {
-  if (!targetPath || targetPath === ".") {
-    return scopeRoot;
-  }
-
-  return scopeRoot ? pathPosix.join(scopeRoot, targetPath) : pathPosix.normalize(targetPath);
-}
-
-async function resolveFilesystemPath(
-  obsidian: ObsidianClient,
-  scopeRoot: string,
-  targetPath: string,
-): Promise<string> {
-  const vaultPath = await obsidian.vaultPath();
-  const scopedPath = resolveVaultPath(scopeRoot, targetPath);
-  const relativePath = scopedPath.split("/").filter(Boolean);
-  const resolvedPath = path.resolve(vaultPath, ...relativePath);
-  const normalizedVaultPath = path.resolve(vaultPath);
-
-  if (
-    resolvedPath !== normalizedVaultPath &&
-    !resolvedPath.startsWith(`${normalizedVaultPath}${path.sep}`)
-  ) {
-    throw new Error(`Resolved path escapes the vault root: ${targetPath}`);
-  }
-
-  return resolvedPath;
 }
