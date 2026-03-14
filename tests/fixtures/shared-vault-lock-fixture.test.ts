@@ -27,110 +27,116 @@ afterEach(async () => {
 });
 
 describe("shared vault lock fixture integration", () => {
-  test("serializes createObsidianTest runs across separate vp test processes", async () => {
-    const sandbox = await createFixtureSandbox();
-    const holder = await spawnFixtureChild({
-      lockRoot: sandbox.lockRoot,
-      mode: "hold",
-      signalDir: path.join(sandbox.root, "holder"),
-      vaultRoot: sandbox.vaultRoot,
-    });
+  test(
+    "serializes createObsidianTest runs across separate vp test processes",
+    { timeout: 30_000 },
+    async () => {
+      const sandbox = await createFixtureSandbox();
+      const holder = await spawnFixtureChild({
+        lockRoot: sandbox.lockRoot,
+        mode: "hold",
+        signalDir: path.join(sandbox.root, "holder"),
+        vaultRoot: sandbox.vaultRoot,
+      });
 
-    await holder.waitForJson("started.json");
-    await holder.waitForJson("attempt.json");
-    const holderReady = await holder.waitForJson("ready.json");
-    const holderLock = await waitForLockState(
-      sandbox.lockRoot,
-      holderReady.vaultPath!,
-      (state) => state !== null,
-    );
-    const waiter = await spawnFixtureChild({
-      lockRoot: sandbox.lockRoot,
-      mode: "once",
-      signalDir: path.join(sandbox.root, "waiter"),
-      vaultRoot: sandbox.vaultRoot,
-    });
+      await holder.waitForJson("started.json");
+      await holder.waitForJson("attempt.json");
+      const holderReady = await holder.waitForJson("ready.json");
+      const holderLock = await waitForLockState(
+        sandbox.lockRoot,
+        holderReady.vaultPath!,
+        (state) => state !== null,
+      );
+      const waiter = await spawnFixtureChild({
+        lockRoot: sandbox.lockRoot,
+        mode: "once",
+        signalDir: path.join(sandbox.root, "waiter"),
+        vaultRoot: sandbox.vaultRoot,
+      });
 
-    await waiter.waitForJson("started.json");
-    await waiter.waitForJson("attempt.json");
+      await waiter.waitForJson("started.json");
+      await waiter.waitForJson("attempt.json");
 
-    const blockedLock = await waitForLockState(
-      sandbox.lockRoot,
-      holderReady.vaultPath!,
-      (state) => state?.metadata.ownerId === holderLock.metadata.ownerId,
-    );
-    expect(blockedLock.metadata.ownerId).toBe(holderLock.metadata.ownerId);
-    await expect(waiter.readJsonIfExists("ready.json")).resolves.toBeNull();
+      const blockedLock = await waitForLockState(
+        sandbox.lockRoot,
+        holderReady.vaultPath!,
+        (state) => state?.metadata.ownerId === holderLock.metadata.ownerId,
+      );
+      expect(blockedLock.metadata.ownerId).toBe(holderLock.metadata.ownerId);
+      await expect(waiter.readJsonIfExists("ready.json")).resolves.toBeNull();
 
-    await holder.release();
+      await holder.release();
 
-    const waiterReady = await waiter.waitForJson("ready.json", 5_000);
-    const holderDone = await holder.waitForJson("done.json");
-    await waiter.waitForJson("done.json", 5_000);
-    await expect(holder.exit).resolves.toMatchObject({ code: 0, signal: null });
-    await expect(waiter.exit).resolves.toMatchObject({ code: 0, signal: null });
-    childProcesses.delete(holder.child);
-    childProcesses.delete(waiter.child);
+      const waiterReady = await waiter.waitForJson("ready.json", 5_000);
+      const holderDone = await holder.waitForJson("done.json");
+      await waiter.waitForJson("done.json", 5_000);
+      await expect(holder.exit).resolves.toMatchObject({ code: 0, signal: null });
+      await expect(waiter.exit).resolves.toMatchObject({ code: 0, signal: null });
+      childProcesses.delete(holder.child);
+      childProcesses.delete(waiter.child);
 
-    expect(waiterReady.readyAt).toBeGreaterThanOrEqual(
-      holderDone.doneAt ?? holderReady.readyAt ?? 0,
-    );
-    await expect(readFile(holder.evalLog, "utf8")).resolves.toContain("__obsidianE2ELock");
-    await expect(readFile(waiter.evalLog, "utf8")).resolves.toContain("__obsidianE2ELock");
-  }, 30_000);
+      expect(waiterReady.readyAt).toBeGreaterThanOrEqual(
+        holderDone.doneAt ?? holderReady.readyAt ?? 0,
+      );
+      await expect(readFile(holder.evalLog, "utf8")).resolves.toContain("__obsidianE2ELock");
+      await expect(readFile(waiter.evalLog, "utf8")).resolves.toContain("__obsidianE2ELock");
+    },
+  );
 
-  test("waits for stale takeover when the fixture holder process crashes", async () => {
-    const sandbox = await createFixtureSandbox();
-    const staleMs = 400;
-    const crashedHolder = await spawnFixtureChild({
-      lockRoot: sandbox.lockRoot,
-      mode: "crash",
-      signalDir: path.join(sandbox.root, "holder"),
-      staleMs,
-      timeoutMs: 5_000,
-      vaultRoot: sandbox.vaultRoot,
-    });
+  test(
+    "waits for stale takeover when the fixture holder process crashes",
+    { timeout: 30_000 },
+    async () => {
+      const sandbox = await createFixtureSandbox();
+      const staleMs = 400;
+      const crashedHolder = await spawnFixtureChild({
+        lockRoot: sandbox.lockRoot,
+        mode: "crash",
+        signalDir: path.join(sandbox.root, "holder"),
+        staleMs,
+        timeoutMs: 5_000,
+        vaultRoot: sandbox.vaultRoot,
+      });
 
-    await crashedHolder.waitForJson("started.json");
-    await crashedHolder.waitForJson("attempt.json");
-    const holderReady = await crashedHolder.waitForJson("ready.json");
-    const holderLock = await waitForLockState(
-      sandbox.lockRoot,
-      holderReady.vaultPath!,
-      (state) => state !== null,
-      staleMs,
-    );
-    await expect(crashedHolder.exit).resolves.toMatchObject({ code: 1, signal: null });
-    childProcesses.delete(crashedHolder.child);
+      await crashedHolder.waitForJson("started.json");
+      await crashedHolder.waitForJson("attempt.json");
+      const holderReady = await crashedHolder.waitForJson("ready.json");
+      const holderLock = await waitForLockState(
+        sandbox.lockRoot,
+        holderReady.vaultPath!,
+        (state) => state !== null,
+        staleMs,
+      );
 
-    const staleHolderLock = await waitForLockState(
-      sandbox.lockRoot,
-      holderReady.vaultPath!,
-      (state) =>
-        state?.isStale === true && state.metadata.ownerId === holderLock.metadata.ownerId,
-      staleMs,
-    );
-    expect(staleHolderLock.isStale).toBe(true);
-    expect(staleHolderLock.metadata.ownerId).toBe(holderLock.metadata.ownerId);
+      const staleHolderLock = await waitForLockState(
+        sandbox.lockRoot,
+        holderReady.vaultPath!,
+        (state) =>
+          state?.isStale === true && state.metadata.ownerId === holderLock.metadata.ownerId,
+        staleMs,
+      );
+      expect(staleHolderLock.isStale).toBe(true);
+      expect(staleHolderLock.metadata.ownerId).toBe(holderLock.metadata.ownerId);
 
-    const waiter = await spawnFixtureChild({
-      lockRoot: sandbox.lockRoot,
-      mode: "once",
-      signalDir: path.join(sandbox.root, "waiter"),
-      staleMs,
-      timeoutMs: 5_000,
-      vaultRoot: sandbox.vaultRoot,
-    });
-    await waiter.waitForJson("started.json");
-    await waiter.waitForJson("attempt.json");
+      const waiter = await spawnFixtureChild({
+        lockRoot: sandbox.lockRoot,
+        mode: "once",
+        signalDir: path.join(sandbox.root, "waiter"),
+        staleMs,
+        timeoutMs: 5_000,
+        vaultRoot: sandbox.vaultRoot,
+      });
+      await waiter.waitForJson("started.json");
+      await waiter.waitForJson("attempt.json");
 
-    const waiterReady = await waiter.waitForJson("ready.json", 3_000);
-    await waiter.waitForJson("done.json");
-    await waitForExitOrKill(waiter);
-    childProcesses.delete(waiter.child);
+      const waiterReady = await waiter.waitForJson("ready.json", 3_000);
+      await waiter.waitForJson("done.json");
+      await waitForExitOrKill(waiter);
+      childProcesses.delete(waiter.child);
 
-    expect(waiterReady.readyAt).toBeGreaterThanOrEqual((holderReady.readyAt ?? 0) + staleMs);
-  }, 30_000);
+      expect(waiterReady.readyAt).toBeGreaterThanOrEqual((holderReady.readyAt ?? 0) + staleMs);
+    },
+  );
 });
 
 interface FixtureChildHandle {

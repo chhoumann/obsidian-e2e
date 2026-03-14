@@ -26,7 +26,7 @@ Replace timer-shaped subprocess smoke test assertions with state-based handshake
   - Validation:
     - `vp test tests/fixtures/shared-vault-lock-fixture.test.ts`
 
-- [ ] T3 Integrate, validate, and document remaining intentional timing dependencies
+- [x] T3 Integrate, validate, and document remaining intentional timing dependencies
   - depends_on: ["T1", "T2"]
   - Acceptance:
     - ensure both refactors coexist cleanly
@@ -52,6 +52,11 @@ Replace timer-shaped subprocess smoke test assertions with state-based handshake
   inspected as stale before spawning the takeover child, preserving stale
   coverage without arbitrary sleeps.
 - Validated T2 with `vp test tests/fixtures/shared-vault-lock-fixture.test.ts`.
+- Completed T3 by reconciling both refactors, switching the fixture tests to
+  explicit timeout options, and validating the focused lock tests plus
+  `pnpm run release:check`. The stale fixture case now treats filesystem lock
+  state as authoritative instead of waiting on the outer `vp test` wrapper to
+  exit.
 
 ## Files
 
@@ -67,6 +72,6 @@ Replace timer-shaped subprocess smoke test assertions with state-based handshake
   time; the refactor removes arbitrary sleeps for proving blocking, not the
   stale heartbeat model itself.
 - The nested `vp test` subprocess used by the fixture smoke tests can outlive
-  the child test body in the stale-takeover case, so the parent test now waits
-  for completion and force-collects the child only if the wrapper process lags
-  behind.
+  the child test body in the stale-takeover case, so the parent test now uses
+  filesystem lock state as the protocol signal and only force-collects the
+  wrapper if it lags behind the meaningful state transition.
