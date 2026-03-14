@@ -20,7 +20,7 @@
   - depends_on: [`T1`, `T2`]
 - [x] `T5` Keep `src/vitest.ts` aligned with the new main-entry exports
   - depends_on: [`T2`, `T3`, `T4`]
-- [ ] `T6` Add or update tests for the main entry point export surface
+- [x] `T6` Add or update tests for the main entry point export surface
   - depends_on: [`T3`, `T4`, `T5`]
 - [x] `T7` Update docs with manual lifecycle usage from `obsidian-e2e`
   - depends_on: [`T3`, `T4`]
@@ -38,9 +38,9 @@
 
 ## Status
 
-- Completed: `T1`, `T2`, `T3`, `T4`, `T5`, `T7`
+- Completed: `T1`, `T2`, `T3`, `T4`, `T5`, `T6`, `T7`
 - In progress: none
-- Pending: `T6`, `T8`
+- Pending: `T8`
 
 ## Work Log
 
@@ -54,6 +54,8 @@
 - Re-exported the lock runtime helpers from `src/index.ts` and aligned
   `src/vitest.ts` to expose the same runtime/type surface for consumers that
   already import from the fixture-focused subpath.
+- Added a focused barrel-surface test that imports the vault lock runtime
+  helpers and related lock types directly from `src/index.ts`.
 - Updated `README.md` with a narrow manual lifecycle example that imports
   `createObsidianClient`, `acquireVaultRunLock`, and
   `clearVaultRunLockMarker` from `obsidian-e2e`, and explicitly states that
@@ -65,6 +67,7 @@
 - `./src/index.ts`
 - `./src/vitest.ts`
 - `./README.md`
+- `./tests/main-entry/vault-lock-exports.test.ts`
 - `./export-vault-lock-plan.md`
 
 ## Errors or Gotchas
@@ -78,3 +81,5 @@
 - The README example intentionally stays narrow: it documents only manual
   `beforeAll` / `afterAll` lock acquisition and release from the main entry
   point, not the broader fixture API.
+- This task validated the main barrel directly instead of relying on `src/vitest.ts`
+  or declaration-only inspection.
