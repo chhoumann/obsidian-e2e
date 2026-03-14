@@ -45,9 +45,9 @@ describe("shared vault lock fixture integration", () => {
     await expect(waiter.waitForJson("ready.json", 250)).rejects.toThrow(/Timed out/);
     await holder.release();
 
-    const waiterReady = await waiter.waitForJson("ready.json");
+    const waiterReady = await waiter.waitForJson("ready.json", 5_000);
     const holderDone = await holder.waitForJson("done.json");
-    await waiter.waitForJson("done.json");
+    await waiter.waitForJson("done.json", 5_000);
     await expect(holder.exit).resolves.toMatchObject({ code: 0, signal: null });
     await expect(waiter.exit).resolves.toMatchObject({ code: 0, signal: null });
     childProcesses.delete(holder.child);
@@ -200,6 +200,12 @@ async function spawnFixtureChild({
         try {
           return JSON.parse(await readFile(targetPath, "utf8")) as FixtureChildSignal;
         } catch {}
+
+        if (child.exitCode !== null || child.signalCode !== null) {
+          throw new Error(
+            `Child exited before writing ${targetPath}: code=${child.exitCode} signal=${child.signalCode}\nstdout:\n${stdout}\nstderr:\n${stderr}`,
+          );
+        }
 
         if (Date.now() - startedAt >= timeoutMs) {
           throw new Error(
