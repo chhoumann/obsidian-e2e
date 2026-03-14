@@ -1,6 +1,6 @@
 {
   "name": "obsidian-e2e",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Vitest-first end-to-end test utilities for Obsidian plugins.",
   "homepage": "https://github.com/chhoumann/obsidian-e2e#readme",
   "bugs": {
