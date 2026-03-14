@@ -16,7 +16,7 @@ Replace timer-shaped subprocess smoke test assertions with state-based handshake
   - Validation:
     - `vp test tests/fixtures/vault-lock.test.ts`
 
-- [ ] T2 Refactor fixture-level shared vault lock smoke tests in `tests/fixtures/shared-vault-lock-fixture.test.ts` and `tests/helpers/shared-vault-lock-fixture-child.test.ts`
+- [x] T2 Refactor fixture-level shared vault lock smoke tests in `tests/fixtures/shared-vault-lock-fixture.test.ts` and `tests/helpers/shared-vault-lock-fixture-child.test.ts`
   - depends_on: []
   - Acceptance:
     - remove arbitrary sleeps/short timeout assertions used to prove blocking
@@ -44,11 +44,21 @@ Replace timer-shaped subprocess smoke test assertions with state-based handshake
   `inspectVaultRunLock(...)` polling for lock-owner transitions. Stale takeover
   coverage now waits for the inspected lock state to become stale before
   asserting the next owner.
+- Completed T2 by replacing the fixture-level lock smoke tests' timeout-based
+  blocking proof with explicit child `started` / `attempt` rendezvous files and
+  lock-state inspection. The non-stale case now proves contention by showing
+  the holder still owns the inspected lock while the waiter has started but not
+  reached `ready`. The stale case now waits for the crashed holder's lock to be
+  inspected as stale before spawning the takeover child, preserving stale
+  coverage without arbitrary sleeps.
+- Validated T2 with `vp test tests/fixtures/shared-vault-lock-fixture.test.ts`.
 
 ## Files
 
 - `./tests/fixtures/vault-lock.test.ts`
 - `./tests/helpers/vault-lock-child.ts`
+- `./tests/fixtures/shared-vault-lock-fixture.test.ts`
+- `./tests/helpers/shared-vault-lock-fixture-child.test.ts`
 - `./timer-refactor-plan.md`
 
 ## Errors / Gotchas
@@ -56,3 +66,7 @@ Replace timer-shaped subprocess smoke test assertions with state-based handshake
 - The stale-takeover scenario still intentionally depends on elapsed lease
   time; the refactor removes arbitrary sleeps for proving blocking, not the
   stale heartbeat model itself.
+- The nested `vp test` subprocess used by the fixture smoke tests can outlive
+  the child test body in the stale-takeover case, so the parent test now waits
+  for completion and force-collects the child only if the wrapper process lags
+  behind.

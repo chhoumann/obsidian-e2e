@@ -10,6 +10,12 @@ import type { CommandTransport, ExecResult } from "../../src/core/types";
 const isChildRun = process.env.OBSIDIAN_E2E_FIXTURE_CHILD === "1";
 
 if (isChildRun) {
+  await mkdir(getEnv("OBSIDIAN_E2E_SIGNAL_DIR"), { recursive: true });
+  await writeJsonFile(getEnv("OBSIDIAN_E2E_STARTED_FILE"), {
+    pid: process.pid,
+    startedAt: Date.now(),
+  });
+
   const childTest = createObsidianTest({
     sharedVaultLock: {
       heartbeatMs: 50,
@@ -54,6 +60,8 @@ if (isChildRun) {
 }
 
 function createTransport(): CommandTransport {
+  let attemptedLockAcquisition = false;
+
   return async (request) => {
     if (request.argv[0] === "--help") {
       return createResult(request.bin, request.argv, "usage\n");
@@ -70,6 +78,13 @@ function createTransport(): CommandTransport {
     );
 
     if (command === "vault" && args.info === "path") {
+      if (!attemptedLockAcquisition) {
+        attemptedLockAcquisition = true;
+        await writeJsonFile(getEnv("OBSIDIAN_E2E_ATTEMPT_FILE"), {
+          pid: process.pid,
+          startedAt: Date.now(),
+        });
+      }
       return createResult(request.bin, request.argv, `${getEnv("OBSIDIAN_E2E_VAULT_ROOT")}\n`);
     }
 

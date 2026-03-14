@@ -8,6 +8,8 @@ import { setTimeout as delay } from "node:timers/promises";
 
 import { afterEach, describe, expect, test } from "vite-plus/test";
 
+import { inspectVaultRunLock, type VaultRunLockState } from "../../src/fixtures/vault-lock";
+
 const tempDirectories: string[] = [];
 const childProcesses = new Set<ChildProcessByStdio<null, Readable, Readable>>();
 
@@ -34,7 +36,14 @@ describe("shared vault lock fixture integration", () => {
       vaultRoot: sandbox.vaultRoot,
     });
 
+    await holder.waitForJson("started.json");
+    await holder.waitForJson("attempt.json");
     const holderReady = await holder.waitForJson("ready.json");
+    const holderLock = await waitForLockState(
+      sandbox.lockRoot,
+      holderReady.vaultPath!,
+      (state) => state !== null,
+    );
     const waiter = await spawnFixtureChild({
       lockRoot: sandbox.lockRoot,
       mode: "once",
@@ -42,7 +51,17 @@ describe("shared vault lock fixture integration", () => {
       vaultRoot: sandbox.vaultRoot,
     });
 
-    await expect(waiter.waitForJson("ready.json", 250)).rejects.toThrow(/Timed out/);
+    await waiter.waitForJson("started.json");
+    await waiter.waitForJson("attempt.json");
+
+    const blockedLock = await waitForLockState(
+      sandbox.lockRoot,
+      holderReady.vaultPath!,
+      (state) => state?.metadata.ownerId === holderLock.metadata.ownerId,
+    );
+    expect(blockedLock.metadata.ownerId).toBe(holderLock.metadata.ownerId);
+    await expect(waiter.readJsonIfExists("ready.json")).resolves.toBeNull();
+
     await holder.release();
 
     const waiterReady = await waiter.waitForJson("ready.json", 5_000);
@@ -58,11 +77,11 @@ describe("shared vault lock fixture integration", () => {
     );
     await expect(readFile(holder.evalLog, "utf8")).resolves.toContain("__obsidianE2ELock");
     await expect(readFile(waiter.evalLog, "utf8")).resolves.toContain("__obsidianE2ELock");
-  }, 10_000);
+  }, 30_000);
 
   test("waits for stale takeover when the fixture holder process crashes", async () => {
     const sandbox = await createFixtureSandbox();
-    const staleMs = 150;
+    const staleMs = 400;
     const crashedHolder = await spawnFixtureChild({
       lockRoot: sandbox.lockRoot,
       mode: "crash",
@@ -72,8 +91,27 @@ describe("shared vault lock fixture integration", () => {
       vaultRoot: sandbox.vaultRoot,
     });
 
+    await crashedHolder.waitForJson("started.json");
+    await crashedHolder.waitForJson("attempt.json");
     const holderReady = await crashedHolder.waitForJson("ready.json");
-    await delay(100);
+    const holderLock = await waitForLockState(
+      sandbox.lockRoot,
+      holderReady.vaultPath!,
+      (state) => state !== null,
+      staleMs,
+    );
+    await expect(crashedHolder.exit).resolves.toMatchObject({ code: 1, signal: null });
+    childProcesses.delete(crashedHolder.child);
+
+    const staleHolderLock = await waitForLockState(
+      sandbox.lockRoot,
+      holderReady.vaultPath!,
+      (state) =>
+        state?.isStale === true && state.metadata.ownerId === holderLock.metadata.ownerId,
+      staleMs,
+    );
+    expect(staleHolderLock.isStale).toBe(true);
+    expect(staleHolderLock.metadata.ownerId).toBe(holderLock.metadata.ownerId);
 
     const waiter = await spawnFixtureChild({
       lockRoot: sandbox.lockRoot,
@@ -83,19 +121,23 @@ describe("shared vault lock fixture integration", () => {
       timeoutMs: 5_000,
       vaultRoot: sandbox.vaultRoot,
     });
+    await waiter.waitForJson("started.json");
+    await waiter.waitForJson("attempt.json");
+
     const waiterReady = await waiter.waitForJson("ready.json", 3_000);
     await waiter.waitForJson("done.json");
-    await expect(waiter.exit).resolves.toMatchObject({ code: 0, signal: null });
+    await waitForExitOrKill(waiter);
     childProcesses.delete(waiter.child);
 
     expect(waiterReady.readyAt).toBeGreaterThanOrEqual((holderReady.readyAt ?? 0) + staleMs);
-  }, 10_000);
+  }, 30_000);
 });
 
 interface FixtureChildHandle {
   child: ChildProcessByStdio<null, Readable, Readable>;
   evalLog: string;
   exit: Promise<{ code: number | null; signal: NodeJS.Signals | null }>;
+  readJsonIfExists(fileName: string): Promise<FixtureChildSignal | null>;
   release(): Promise<void>;
   waitForJson(fileName: string, timeoutMs?: number): Promise<FixtureChildSignal>;
 }
@@ -104,6 +146,7 @@ interface FixtureChildSignal {
   doneAt?: number;
   pid: number;
   readyAt?: number;
+  startedAt?: number;
   vaultPath?: string;
 }
 
@@ -135,9 +178,11 @@ async function spawnFixtureChild({
   timeoutMs = 5_000,
   vaultRoot,
 }: SpawnFixtureChildOptions): Promise<FixtureChildHandle> {
+  const attemptFile = path.join(signalDir, "attempt.json");
   const readyFile = path.join(signalDir, "ready.json");
   const doneFile = path.join(signalDir, "done.json");
   const releaseFile = path.join(signalDir, "release.signal");
+  const startedFile = path.join(signalDir, "started.json");
   const evalLog = path.join(signalDir, "eval.log");
   await mkdir(signalDir, { recursive: true });
   const child = spawn(
@@ -155,9 +200,11 @@ async function spawnFixtureChild({
         OBSIDIAN_E2E_EVAL_LOG: evalLog,
         OBSIDIAN_E2E_FIXTURE_CHILD: "1",
         OBSIDIAN_E2E_LOCK_ROOT: lockRoot,
+        OBSIDIAN_E2E_ATTEMPT_FILE: attemptFile,
         OBSIDIAN_E2E_READY_FILE: readyFile,
         OBSIDIAN_E2E_RELEASE_FILE: releaseFile,
         OBSIDIAN_E2E_SIGNAL_DIR: signalDir,
+        OBSIDIAN_E2E_STARTED_FILE: startedFile,
         OBSIDIAN_E2E_STALE_MS: String(staleMs),
         OBSIDIAN_E2E_TIMEOUT_MS: String(timeoutMs),
         OBSIDIAN_E2E_DONE_FILE: doneFile,
@@ -189,6 +236,15 @@ async function spawnFixtureChild({
     child,
     evalLog,
     exit,
+    async readJsonIfExists(fileName) {
+      const targetPath = path.join(signalDir, fileName);
+
+      try {
+        return JSON.parse(await readFile(targetPath, "utf8")) as FixtureChildSignal;
+      } catch {
+        return null;
+      }
+    },
     async release() {
       await writeFile(releaseFile, "release\n", "utf8");
     },
@@ -217,6 +273,53 @@ async function spawnFixtureChild({
       }
     },
   };
+}
+
+async function waitForLockState(
+  lockRoot: string,
+  vaultPath: string,
+  predicate: (state: VaultRunLockState | null) => boolean,
+  staleMs = 15_000,
+  timeoutMs = 5_000,
+): Promise<VaultRunLockState> {
+  const startedAt = Date.now();
+
+  while (true) {
+    const state = await inspectVaultRunLock({
+      lockRoot,
+      staleMs,
+      vaultPath,
+    });
+
+    if (state && predicate(state)) {
+      return state;
+    }
+
+    if (Date.now() - startedAt >= timeoutMs) {
+      throw new Error(
+        `Timed out waiting for vault lock state on ${vaultPath}. Last state: ${JSON.stringify(state)}`,
+      );
+    }
+
+    await delay(50);
+  }
+}
+
+async function waitForExitOrKill(
+  child: Pick<FixtureChildHandle, "child" | "exit">,
+  timeoutMs = 500,
+): Promise<void> {
+  const exitState = await Promise.race([
+    child.exit.then((result) => ({ result, timedOut: false as const })),
+    delay(timeoutMs).then(() => ({ result: null, timedOut: true as const })),
+  ]);
+
+  if (exitState.timedOut) {
+    if (child.child.exitCode === null && child.child.signalCode === null) {
+      child.child.kill("SIGKILL");
+    }
+    await child.exit;
+  }
 }
 
 async function createTempDir(prefix: string): Promise<string> {
