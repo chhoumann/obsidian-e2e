@@ -6,9 +6,6 @@ on:
     branches:
       - main
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -21,25 +18,30 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
-      - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@v1
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
         with:
-          cache: true
+          version: 10.32.1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          cache: pnpm
           node-version: 24
 
       - name: Install dependencies
-        run: vp install
+        run: pnpm install --frozen-lockfile
 
       - name: Check
-        run: vp check
+        run: pnpm exec vp check
 
       - name: Test
-        run: vp test
+        run: pnpm exec vp test
 
       - name: Pack
-        run: vp pack
+        run: pnpm exec vp pack
 
       - name: Upload failure artifacts
         if: failure()
