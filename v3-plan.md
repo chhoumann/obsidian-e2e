@@ -27,7 +27,7 @@
   - depends_on: [`W4`, `W5`, `W6`]
 - [x] `W8` Document failure artifacts in the README
   - depends_on: [`W5`, `W6`]
-- [ ] `W10` Add CI/release hardening for artifact-aware validation
+- [x] `W10` Add CI/release hardening for artifact-aware validation
   - depends_on: [`W5`, `W7`, `W8`]
 
 ## Initial Slice
@@ -58,9 +58,9 @@ That slice should add:
 
 ## Status
 
-- Completed: `W1`, `W2`, `W3`, `W4`, `W5`, `W6`, `W7`, `W8`
+- Completed: `W1`, `W2`, `W3`, `W4`, `W5`, `W6`, `W7`, `W8`, `W10`
 - In progress: none
-- Pending: `W10`
+- Pending: none
 
 ## Work Log
 
@@ -76,10 +76,22 @@ That slice should add:
 - Added focused tests around artifact planning and failure capture, then
   documented the new `artifactsDir` and `captureOnFailure` options in the
   README.
+- Added GitHub Actions workflows for `setup-vp`-based CI and Changesets-driven
+  releases, wired npm trusted publishing through GitHub OIDC, and added a
+  release changeset so the new automation is immediately usable on the next
+  merge to `main`.
 
 ## Files Modified or Created
 
+- `./.changeset/config.json`
+- `./.changeset/README.md`
+- `./.changeset/twelve-seas-fail.md`
+- `./.github/workflows/ci.yml`
+- `./.github/workflows/release.yml`
+- `./.gitignore`
 - `./README.md`
+- `./package.json`
+- `./pnpm-lock.yaml`
 - `./src/fixtures/base-fixtures.ts`
 - `./src/fixtures/create-plugin-test.ts`
 - `./src/fixtures/failure-artifacts.ts`
@@ -95,3 +107,5 @@ That slice should add:
 - Artifact capture must never hide the original assertion failure, so failed
   reads are written as neighboring `*.error.txt` files instead of surfacing a
   second failure from teardown.
+- npm trusted publishing still requires one-time setup in npm and GitHub before
+  the release workflow can publish without manual intervention.

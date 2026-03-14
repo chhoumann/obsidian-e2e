@@ -38,12 +38,17 @@
   "scripts": {
     "build": "vp pack",
     "check": "vp check",
+    "changeset": "changeset",
     "dev": "vp pack --watch",
+    "release": "changeset publish",
+    "release:check": "vp check && vp test && vp pack",
     "test": "vp test",
     "typecheck": "tsc --noEmit",
+    "version-packages": "changeset version",
     "prepublishOnly": "vp pack"
   },
   "devDependencies": {
+    "@changesets/cli": "^2.30.0",
     "@types/node": "^25.3.5",
     "@typescript/native-preview": "7.0.0-dev.20260309.1",
     "bumpp": "^10.4.1",

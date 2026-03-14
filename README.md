@@ -202,6 +202,33 @@ part of the set: desktop permissions, display availability, or Obsidian state
 can prevent `screenshot.png` from being produced, in which case you should
 expect `screenshot.error.txt` instead.
 
+## Maintainer CI And Releases
+
+This repo now ships with a hardened CI and release flow built around Vite+
+workflow setup, Changesets release orchestration, and npm trusted publishing
+through GitHub OIDC.
+
+At a high level:
+
+- CI installs the toolchain with `setup-vp`, then runs `vp check`,
+  `vp test`, and `vp pack`.
+- When CI fails after artifact capture is enabled in tests, it uploads
+  `.obsidian-e2e-artifacts` so maintainers can inspect the same failure
+  snapshots produced locally.
+- Releases go through Changesets PRs. Merge the version PR that
+  Changesets opens, then let the release workflow publish to npm.
+
+Maintainer setup notes:
+
+- Configure npm trusted publishing for this package and repository so the
+  GitHub release workflow can publish without a long-lived npm token.
+- Grant the publish job `id-token: write` so GitHub can mint the OIDC token npm
+  expects, and keep the release workflow permissions aligned with the write
+  actions it needs, such as `contents: write` and `pull-requests: write` for
+  Changesets automation.
+- If you protect publishing behind a GitHub environment, attach that
+  environment to the release job and allow the workflow to use it.
+
 ## Matchers
 
 Import `obsidian-e2e/matchers` once in your test setup to register:
