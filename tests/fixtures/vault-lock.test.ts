@@ -4,7 +4,6 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { createInterface } from "node:readline";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { setTimeout as delay } from "node:timers/promises";
 
 import { afterEach, describe, expect, test } from "vite-plus/test";
 
@@ -233,15 +232,31 @@ describe("vault lock", () => {
     const lockRoot = await createTempDir("obsidian-e2e-locks-");
     const vaultPath = "/tmp/dev-vault";
     const holder = spawnVaultLockChild("hold", lockRoot, vaultPath);
+    await holder.nextEvent("attempting");
     const holderAcquired = await holder.nextEvent("acquired");
-    const waiter = spawnVaultLockChild("acquire-and-release", lockRoot, vaultPath);
+    await expectLockState(lockRoot, vaultPath, (state) => {
+      expect(state).not.toBeNull();
+      expect(state?.isStale).toBe(false);
+      expect(state?.metadata.ownerId).toBe(holderAcquired.ownerId);
+    });
 
-    await delay(250);
-    expect(waiter.events).toEqual([]);
+    const waiter = spawnVaultLockChild("acquire-and-release", lockRoot, vaultPath);
+    await waiter.nextEvent("attempting");
+    await expectLockState(lockRoot, vaultPath, (state) => {
+      expect(state).not.toBeNull();
+      expect(state?.isStale).toBe(false);
+      expect(state?.metadata.ownerId).toBe(holderAcquired.ownerId);
+    });
 
     holder.release();
     const holderReleased = await holder.nextEvent("released");
     const waiterAcquired = await waiter.nextEvent("acquired", 5_000);
+    await expectLockState(lockRoot, vaultPath, (state) => {
+      expect(state).not.toBeNull();
+      expect(state?.isStale).toBe(false);
+      expect(state?.metadata.ownerId).toBe(waiterAcquired.ownerId);
+    });
+
     const waiterReleased = await waiter.nextEvent("released", 5_000);
 
     expect(waiterAcquired.ownerId).not.toBe(holderAcquired.ownerId);
@@ -259,13 +274,36 @@ describe("vault lock", () => {
     const vaultPath = "/tmp/dev-vault";
     const staleMs = 150;
     const crashedHolder = spawnVaultLockChild("crash-after-acquire", lockRoot, vaultPath, staleMs);
+    await crashedHolder.nextEvent("attempting");
     const crashedAcquired = await crashedHolder.nextEvent("acquired");
+    await expectLockState(lockRoot, vaultPath, (state) => {
+      expect(state).not.toBeNull();
+      expect(state?.isStale).toBe(false);
+      expect(state?.metadata.ownerId).toBe(crashedAcquired.ownerId);
+    });
 
     await expect(crashedHolder.exit).resolves.toMatchObject({ code: 0, signal: null });
     childProcesses.delete(crashedHolder.child);
+    await expectLockState(
+      lockRoot,
+      vaultPath,
+      (state) => {
+        expect(state).not.toBeNull();
+        expect(state?.isStale).toBe(true);
+        expect(state?.metadata.ownerId).toBe(crashedAcquired.ownerId);
+      },
+      5_000,
+      staleMs,
+    );
 
     const waiter = spawnVaultLockChild("acquire-and-release", lockRoot, vaultPath, staleMs);
+    await waiter.nextEvent("attempting");
     const waiterAcquired = await waiter.nextEvent("acquired", 3_000);
+    await expectLockState(lockRoot, vaultPath, (state) => {
+      expect(state).not.toBeNull();
+      expect(state?.isStale).toBe(false);
+      expect(state?.metadata.ownerId).toBe(waiterAcquired.ownerId);
+    });
     const waiterReleased = await waiter.nextEvent("released");
     expect(crashedAcquired.acquiredAt).toBeTypeOf("number");
     const crashedAcquiredAt = crashedAcquired.acquiredAt ?? 0;
@@ -292,7 +330,8 @@ interface VaultLockChildEvent {
   ownerId?: string;
   pid?: number;
   releasedAt?: number;
-  type: "acquired" | "error" | "released";
+  startedAt?: number;
+  type: "acquired" | "attempting" | "error" | "released";
 }
 
 interface VaultLockChildHandle {
@@ -426,4 +465,32 @@ function spawnVaultLockChild(
       child.stdin.end();
     },
   };
+}
+
+async function expectLockState(
+  lockRoot: string,
+  vaultPath: string,
+  assertState: (state: Awaited<ReturnType<typeof inspectVaultRunLock>>) => void,
+  timeoutMs = 2_000,
+  staleMs?: number,
+): Promise<void> {
+  const startedAt = Date.now();
+  let lastState: Awaited<ReturnType<typeof inspectVaultRunLock>> = null;
+
+  while (Date.now() - startedAt < timeoutMs) {
+    lastState = await inspectVaultRunLock({
+      lockRoot,
+      staleMs,
+      vaultPath,
+    });
+
+    try {
+      assertState(lastState);
+      return;
+    } catch {}
+
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+
+  assertState(lastState);
 }

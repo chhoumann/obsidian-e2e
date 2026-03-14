@@ -19,6 +19,11 @@ if (!mode || !lockRoot || !vaultPath) {
 } else {
   try {
     const staleMs = staleMsArg ? Number(staleMsArg) : undefined;
+    await writeEvent({
+      pid: process.pid,
+      startedAt: Date.now(),
+      type: "attempting",
+    });
     const lock = await acquireVaultRunLock({
       heartbeatMs: 50,
       lockRoot,
@@ -65,7 +70,8 @@ interface VaultLockChildEvent {
   ownerId?: string;
   pid?: number;
   releasedAt?: number;
-  type: "acquired" | "error" | "released";
+  startedAt?: number;
+  type: "acquired" | "attempting" | "error" | "released";
 }
 
 async function writeEvent(event: VaultLockChildEvent): Promise<void> {
