@@ -122,6 +122,11 @@ The lock path is covered by a real multi-process smoke test: one process can
 hold the lease while another waits, and a second process can also take over
 after the original holder dies and its heartbeat goes stale.
 
+The fixture layer is also covered the same way: separate `createObsidianTest()`
+runs can contend for the same `sharedVaultLock`, and the smoke path verifies
+that one run waits until the other releases or goes stale. That proves lock
+handoff across process boundaries, not safe parallel mutation inside one vault.
+
 This mode prevents collisions between concurrent runs that share one live
 vault, but it does not create true parallel execution inside that vault. It
 serializes access. If your goal is real parallelism, use separate vaults rather

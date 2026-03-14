@@ -76,6 +76,9 @@ That slice adds:
 - Added a real multi-process smoke path that spawns separate Node processes
   against the shared lock manager and verifies both serialized acquisition and
   stale-lock takeover after a crashed holder exits without cleanup.
+- Added a higher-level fixture smoke path that runs separate
+  `createObsidianTest({ sharedVaultLock: ... })` processes against one shared
+  vault root and verifies lock handoff through the actual fixture lifecycle.
 
 ## Files Modified or Created
 
@@ -88,7 +91,9 @@ That slice adds:
 - `./src/vitest.ts`
 - `./tests/fixtures/create-obsidian-test.test.ts`
 - `./tests/helpers/vault-lock-child.ts`
+- `./tests/helpers/shared-vault-lock-fixture-child.test.ts`
 - `./tests/helpers/stub-obsidian-client.ts`
+- `./tests/fixtures/shared-vault-lock-fixture.test.ts`
 - `./tests/fixtures/vault-lock.test.ts`
 - `./v4-plan.md`
 
@@ -107,3 +112,7 @@ That slice adds:
 - The smoke path uses separate child Node processes with
   `--experimental-strip-types` so it can execute the TypeScript lock helper
   directly without requiring a prior package build.
+- The higher-level fixture smoke path kills the worker from inside the child
+  test body for stale-lock coverage. Killing the outer `vp test` wrapper is not
+  equivalent because the wrapper can outlive the worker that actually held the
+  lock.
