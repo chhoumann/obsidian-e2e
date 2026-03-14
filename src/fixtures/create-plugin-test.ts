@@ -7,7 +7,7 @@ import type { TestContext } from "vite-plus/test";
 import { getClientInternals } from "../core/internals";
 import type { ObsidianClient } from "../core/types";
 import { createVaultApi } from "../vault/vault";
-import { createBaseFixtures } from "./base-fixtures";
+import { createBaseFixtures, type BaseFixtureState } from "./base-fixtures";
 import { registerPluginFailureArtifacts } from "./failure-artifacts";
 import type {
   CreatePluginTestOptions,
@@ -18,7 +18,7 @@ import type {
 } from "./types";
 
 export function createPluginTest(options: CreatePluginTestOptions): PluginTest {
-  return base.extend<PluginFixtures>({
+  const fixtures = {
     ...createBaseFixtures(options, {
       async createVault(obsidian) {
         if (options.seedVault) {
@@ -34,7 +34,7 @@ export function createPluginTest(options: CreatePluginTestOptions): PluginTest {
         onTestFailed,
         task,
       }: Pick<PluginFixtures & TestContext, "obsidian" | "onTestFailed" | "task">,
-      use,
+      use: (plugin: PluginFixtures["plugin"]) => Promise<void>,
     ) => {
       const plugin = obsidian.plugin(options.pluginId);
       const wasEnabled = await plugin.isEnabled();
@@ -57,7 +57,9 @@ export function createPluginTest(options: CreatePluginTestOptions): PluginTest {
         }
       }
     },
-  });
+  };
+
+  return base.extend<PluginFixtures & BaseFixtureState>(fixtures as never) as PluginTest;
 }
 
 async function applyVaultSeed(obsidian: ObsidianClient, seedVault: VaultSeed): Promise<void> {

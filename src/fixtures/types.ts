@@ -17,9 +17,18 @@ export interface FailureArtifactOptions {
   workspace?: boolean;
 }
 
+export interface SharedVaultLockOptions {
+  heartbeatMs?: number;
+  lockRoot?: string;
+  onBusy?: "fail" | "wait";
+  staleMs?: number;
+  timeoutMs?: number;
+}
+
 export interface CreateObsidianTestOptions extends CreateObsidianClientOptions {
   artifactsDir?: string;
   captureOnFailure?: boolean | FailureArtifactOptions;
+  sharedVaultLock?: boolean | SharedVaultLockOptions;
   sandboxRoot?: string;
 }
 

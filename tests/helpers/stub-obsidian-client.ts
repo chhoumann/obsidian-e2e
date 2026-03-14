@@ -9,11 +9,14 @@ import type {
   WorkspaceTab,
 } from "../../src/core/types";
 
+type Awaitable<T> = Promise<T> | T;
+
 interface CreateStubObsidianClientOptions {
   activeFile?: string | null;
   commands?: string[];
   domResult?: DevDomResult;
   editorText?: string | null;
+  onEval?: (code: string) => Awaitable<unknown>;
   onScreenshot?: (path: string) => Promise<string> | string;
   pluginFactory?: (client: ObsidianClient, id: string) => PluginHandle;
   readFileForRestore?: (filePath: string) => Promise<string>;
@@ -57,6 +60,10 @@ export function createStubObsidianClient(options: CreateStubObsidianClientOption
         return domResult;
       },
       async eval(code: string) {
+        if (options.onEval) {
+          return options.onEval(code) as never;
+        }
+
         if (code === "app.workspace.getActiveFile()?.path ?? null") {
           return activeFile as never;
         }

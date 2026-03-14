@@ -62,6 +62,45 @@ Run Obsidian-backed tests serially. A live Obsidian app and shared vault are
 not safe to hit from multiple Vitest workers at once, so `fileParallelism: false`
 and `maxWorkers: 1` should be treated as the default, not as an optimization.
 
+## Shared Vault Locking
+
+If multiple worktrees or separate test runs all point at the same
+`obsidian vault=dev` vault, you can enable `sharedVaultLock` to serialize access
+across those runs:
+
+```ts
+import { createObsidianTest, createPluginTest } from "obsidian-e2e/vitest";
+
+export const test = createObsidianTest({
+  vault: "dev",
+  sharedVaultLock: true,
+});
+
+export const pluginTest = createPluginTest({
+  vault: "dev",
+  pluginId: "quickadd",
+  sharedVaultLock: {
+    onBusy: "wait",
+    timeoutMs: 60_000,
+  },
+});
+```
+
+`sharedVaultLock` is acquired once per worker before that worker starts using
+the shared vault. The authoritative state is a host-side lock directory keyed
+by the resolved vault path. That file-backed lock owns the lease, updates a
+heartbeat, and allows stale-lock takeover after the configured timeout window.
+
+For visibility inside the running app, the holder also publishes a best-effort
+marker into the Obsidian process. That marker is not authoritative. The
+filesystem lock is the source of truth, and the app marker is only there to
+help humans understand which run currently owns the vault.
+
+This mode prevents collisions between concurrent runs that share one live
+vault, but it does not create true parallel execution inside that vault. It
+serializes access. If your goal is real parallelism, use separate vaults rather
+than one shared `vault: "dev"` target.
+
 ## Writing Tests
 
 ```ts

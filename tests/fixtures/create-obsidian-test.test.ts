@@ -8,9 +8,15 @@ import { createObsidianTest } from "../../src/vitest";
 import type { CommandTransport, ExecResult } from "../../src/core/types";
 
 let sandboxRootPath = "";
+const sharedLockRoot = path.join(os.tmpdir(), `obsidian-e2e-shared-lock-${process.pid}`);
 let vaultRoot = "";
+const evalCalls: string[] = [];
 
 const fixtureTest = createObsidianTest({
+  sharedVaultLock: {
+    heartbeatMs: 10_000,
+    lockRoot: sharedLockRoot,
+  },
   transport: createTransport(),
   vault: "dev",
 });
@@ -34,6 +40,7 @@ afterAll(async () => {
     fs.readFile(path.join(vaultRoot, ".obsidian", "plugins", "quickadd", "data.json"), "utf8"),
   ).resolves.toContain('"count": 1');
 
+  await fs.rm(sharedLockRoot, { force: true, recursive: true });
   await fs.rm(vaultRoot, { force: true, recursive: true });
 });
 
@@ -53,6 +60,8 @@ fixtureTest(
 
     await expect(vault.read("outside.md")).resolves.toBe("outside");
     await expect(sandbox.read("inside.md")).resolves.toBe("inside");
+    await expect(fs.readdir(sharedLockRoot)).resolves.toHaveLength(1);
+    expect(evalCalls.some((code) => code.includes("__obsidianE2ELock"))).toBe(true);
     await expect(obsidian.plugin("quickadd").data<{ count: number }>().read()).resolves.toEqual({
       count: 2,
     });
@@ -89,6 +98,11 @@ function createTransport(): CommandTransport {
 
     if (command === "plugin:reload") {
       return createResult(request.bin, request.argv, "");
+    }
+
+    if (command === "eval") {
+      evalCalls.push(String(args.code ?? ""));
+      return createResult(request.bin, request.argv, "{}\n");
     }
 
     throw new Error(`Unhandled transport request: ${request.argv.join(" ")}`);
