@@ -1,13 +1,17 @@
-export { createObsidianClient } from './core/client'
+export { createObsidianClient } from "./core/client";
 export type {
+  CommandTransport,
+  CreateObsidianClientOptions,
   ExecOptions,
   ExecResult,
   JsonFile,
+  JsonFileUpdater,
   ObsidianArg,
   ObsidianClient,
-  ObsidianClientOptions,
   PluginHandle,
   SandboxApi,
   VaultApi,
   WaitForOptions,
-} from './core/types'
+} from "./core/types";
+export { createSandboxApi } from "./vault/sandbox";
+export { createVaultApi } from "./vault/vault";

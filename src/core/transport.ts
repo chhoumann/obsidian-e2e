@@ -1,80 +1,66 @@
-import { execFile } from 'node:child_process'
-import { promisify } from 'node:util'
-import { ObsidianCommandError } from './errors'
-import type { ExecOptions, ExecResult } from './types'
+import { spawn } from "node:child_process";
 
-const execFileAsync = promisify(execFile)
-const DEFAULT_TIMEOUT_MS = 10_000
-const MAX_BUFFER_BYTES = 10 * 1024 * 1024
+import { ObsidianCommandError } from "./errors";
+import type { CommandTransport, ExecuteRequest, ExecResult } from "./types";
 
-export async function runObsidianCommand(
-  bin: string,
-  command: string,
-  argv: string[],
-  options: ExecOptions = {},
-): Promise<ExecResult> {
-  const commandString = [bin, ...argv].join(' ')
+const DEFAULT_TIMEOUT_MS = 30_000;
 
-  try {
-    const result = await execFileAsync(bin, argv, {
-      encoding: 'utf8',
-      maxBuffer: MAX_BUFFER_BYTES,
-      timeout: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-    })
+export const executeCommand: CommandTransport = async ({
+  allowNonZeroExit = false,
+  argv,
+  bin,
+  cwd,
+  env,
+  timeoutMs = DEFAULT_TIMEOUT_MS,
+}: ExecuteRequest): Promise<ExecResult> => {
+  const child = spawn(bin, argv, {
+    cwd,
+    env,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
 
-    return {
-      argv,
-      command: commandString,
-      exitCode: 0,
-      stderr: result.stderr.trim(),
-      stdout: result.stdout.trim(),
-    }
-  } catch (error) {
-    const stderr =
-      typeof error === 'object' &&
-      error !== null &&
-      'stderr' in error &&
-      typeof error.stderr === 'string'
-        ? error.stderr.trim()
-        : ''
-    const stdout =
-      typeof error === 'object' &&
-      error !== null &&
-      'stdout' in error &&
-      typeof error.stdout === 'string'
-        ? error.stdout.trim()
-        : ''
-    const exitCode =
-      typeof error === 'object' &&
-      error !== null &&
-      'code' in error &&
-      typeof error.code === 'number'
-        ? error.code
-        : 1
+  const stdoutChunks: Buffer[] = [];
+  const stderrChunks: Buffer[] = [];
 
-    const result: ExecResult = {
-      argv,
-      command: commandString,
-      exitCode,
-      stderr,
-      stdout,
-    }
+  child.stdout.on("data", (chunk) => {
+    stdoutChunks.push(Buffer.from(chunk));
+  });
 
-    if (options.allowNonZeroExit) {
-      return result
-    }
+  child.stderr.on("data", (chunk) => {
+    stderrChunks.push(Buffer.from(chunk));
+  });
 
-    if (
-      typeof error === 'object' &&
-      error !== null &&
-      'code' in error &&
-      error.code === 'ENOENT'
-    ) {
-      throw new Error(
-        `Obsidian binary "${bin}" was not found. Ensure the Obsidian CLI is installed and available in PATH.`,
-      )
-    }
+  const exitCode = await new Promise<number>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      child.kill("SIGTERM");
+      reject(new Error(`Command timed out after ${timeoutMs}ms: ${bin} ${argv.join(" ")}`));
+    }, timeoutMs);
 
-    throw new ObsidianCommandError(result)
+    child.on("error", (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      resolve(code ?? 0);
+    });
+  });
+
+  const result: ExecResult = {
+    argv,
+    command: bin,
+    exitCode,
+    stderr: Buffer.concat(stderrChunks).toString("utf8"),
+    stdout: Buffer.concat(stdoutChunks).toString("utf8"),
+  };
+
+  if (exitCode !== 0 && !allowNonZeroExit) {
+    throw new ObsidianCommandError(
+      `Obsidian command failed with exit code ${exitCode}: ${bin} ${argv.join(" ")}`,
+      result,
+    );
   }
-}
+
+  return result;
+};

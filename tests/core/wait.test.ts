@@ -1,29 +1,27 @@
-import { describe, expect, test } from 'vite-plus/test'
-import { WaitForTimeoutError } from '../../src/core/errors'
-import { waitFor } from '../../src/core/wait'
+import { describe, expect, test } from "vite-plus/test";
 
-describe('waitFor', () => {
-  test('resolves when the callback becomes truthy', async () => {
-    let attempts = 0
+import { WaitForTimeoutError } from "../../src/core/errors";
+import { waitForValue } from "../../src/core/wait";
 
+describe("waitForValue", () => {
+  test("returns the first resolved value", async () => {
+    let attempts = 0;
+
+    const result = await waitForValue(async () => {
+      attempts += 1;
+      return attempts > 2 ? "ready" : undefined;
+    });
+
+    expect(result).toBe("ready");
+  });
+
+  test("throws a timeout error with context", async () => {
     await expect(
-      waitFor(
-        () => {
-          attempts += 1
-          return attempts > 2 ? 'ready' : false
-        },
-        { intervalMs: 1, timeoutMs: 100 },
-      ),
-    ).resolves.toBe('ready')
-  })
-
-  test('throws an actionable timeout error', async () => {
-    await expect(
-      waitFor(() => false, {
-        intervalMs: 1,
-        message: 'Expected reload to finish.',
-        timeoutMs: 5,
+      waitForValue(async () => false, {
+        intervalMs: 10,
+        message: "a useful condition",
+        timeoutMs: 30,
       }),
-    ).rejects.toBeInstanceOf(WaitForTimeoutError)
-  })
-})
+    ).rejects.toBeInstanceOf(WaitForTimeoutError);
+  });
+});

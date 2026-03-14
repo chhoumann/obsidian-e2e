@@ -1,12 +1,14 @@
 # obsidian-e2e Scaffold Plan
 
 ## Goals
+
 - Scaffold `obsidian-e2e` as a single-package library.
 - Use Vite+ as the workflow shell and `tsdown` as the package build layer.
 - Keep the library Vitest-first, plugin-agnostic, and library-only.
 - Publish `obsidian-e2e`, `obsidian-e2e/vitest`, and `obsidian-e2e/matchers`.
 
 ## Task Graph
+
 - [x] `T1` Initialize the package scaffold and workspace metadata
   - depends_on: []
 - [x] `T2` Add Vite+ workflow integration and root config
@@ -21,31 +23,37 @@
   - depends_on: [`T5`]
 - [x] `T7` Implement generic plugin handle and lazy `data.json` restore semantics
   - depends_on: [`T5`, `T6`]
-- [ ] `T8` Implement Vitest fixture builder in `obsidian-e2e/vitest`
+- [x] `T8` Implement Vitest fixture builder in `obsidian-e2e/vitest`
   - depends_on: [`T5`, `T6`, `T7`]
-- [ ] `T9` Implement matcher entrypoint and matcher type augmentation
+- [x] `T9` Implement matcher entrypoint and matcher type augmentation
   - depends_on: [`T6`, `T8`]
-- [ ] `T10` Add package barrel exports and subpath entrypoints
+- [x] `T10` Add package barrel exports and subpath entrypoints
   - depends_on: [`T3`, `T4`, `T8`, `T9`]
-- [ ] `T11` Add automated tests for core utilities, fixtures, plugin restore behavior, and matchers
+- [x] `T11` Add automated tests for core utilities, fixtures, plugin restore behavior, and matchers
   - depends_on: [`T5`, `T6`, `T7`, `T8`, `T9`]
-- [ ] `T12` Write README usage docs and Vitest serial-execution guidance
+- [x] `T12` Write README usage docs and Vitest serial-execution guidance
   - depends_on: [`T8`, `T9`, `T10`]
-- [ ] `T13` Run verification through `vp check`, `vp test`, and `vp pack` and fix issues
+- [x] `T13` Run verification through `vp check`, `vp test`, and `vp pack` and fix issues
   - depends_on: [`T2`, `T3`, `T10`, `T11`, `T12`]
 
 ## Status
-- Completed: `T1`, `T2`, `T3`
-- Completed: `T4`, `T5`, `T6`, `T7`
-- Pending: `T8`, `T9`, `T10`, `T11`, `T12`, `T13`
+
+- Completed: `T1`, `T2`, `T3`, `T4`, `T5`, `T6`, `T7`, `T8`, `T9`, `T10`, `T11`, `T12`, `T13`
+- In progress: none
+- Pending: none
 
 ## Work Log
+
 - Bootstrapped the repo using `vp create vite:library` in a temp directory and synced the generated scaffold into this repo because `vp create` would not scaffold directly into an existing git-initialized directory.
 - Completed `T2`/`T3` by renaming the package, removing the broken Vite+ config merge, wiring explicit Vite+ scripts, and defining the dual-format tsdown build plus subpath exports.
 - Completed `T4`/`T5` by adding shared core types, direct-binary transport, polling utilities, an initial Obsidian client, and focused tests for arg normalization and waiting behavior.
 - Completed `T6`/`T7` by adding filesystem-backed vault and sandbox APIs, wiring plugin `data.json` snapshot/restore support through client internals, and validating focused plugin/sandbox tests with `vp test`.
+- Completed `T8`/`T9`/`T10` by adding the Vitest fixture entrypoint, matcher registration, and the public subpath entry files.
+- Completed `T11` with focused tests for the core client, plugin restore semantics, vault/sandbox behavior, fixtures, and matchers.
+- Completed `T12`/`T13` by rewriting the README against the real public API and validating the package with `vp check`, `vp test`, `vp exec tsc --noEmit`, and `vp pack`.
 
 ## Files Modified or Created
+
 - `./.gitignore`
 - `./.vite-hooks/pre-commit`
 - `./AGENTS.md`
@@ -73,6 +81,8 @@
 - `./tests/core/client.test.ts`
 - `./tests/core/plugin.test.ts`
 - `./tests/core/wait.test.ts`
+- `./tests/fixtures/create-obsidian-test.test.ts`
+- `./tests/matchers.test.ts`
 - `./tests/vault/sandbox.test.ts`
 - `./tsconfig.json`
 - `./tsdown.config.ts`
@@ -80,6 +90,7 @@
 - `./scaffold-plan.md`
 
 ## Errors or Gotchas
+
 - `vp create vite:library` currently leaves a broken `vite.config.ts` migration when run against the default `create-tsdown` output, so config cleanup is part of the implementation work.
 - The generated `prepare` script caused `vp install` to prompt for hook setup, so the package scripts were cleaned up to avoid interactive install-time configuration.
-- Focused `vp test` now passes for the T6/T7 coverage, but a full-project typecheck still depends on concurrent T8/T9 fixture typing work outside this slice.
+- `vp pack` currently succeeds but emits upstream warnings from Vite+/vite-plus-test internals when producing CommonJS output. The library still builds successfully; those warnings come from the current dependency stack rather than from this repository’s source.

@@ -1,1 +1,1 @@
-export { createPluginHandle } from '../plugin/plugin'
+export { createPluginHandle } from "../plugin/plugin";

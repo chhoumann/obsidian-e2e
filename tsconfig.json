@@ -13,8 +13,9 @@
     "emitDeclarationOnly": true,
     "esModuleInterop": true,
     "isolatedModules": true,
+    "noUncheckedIndexedAccess": true,
     "verbatimModuleSyntax": true,
     "skipLibCheck": true
   },
-  "include": ["src"]
+  "include": ["src", "tests", "vite.config.ts", "tsdown.config.ts"]
 }

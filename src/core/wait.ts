@@ -1,36 +1,32 @@
-import { WaitForTimeoutError } from './errors'
-import type { WaitForOptions } from './types'
+import { WaitForTimeoutError } from "./errors";
+import type { WaitForOptions } from "./types";
 
-const DEFAULT_INTERVAL_MS = 100
-const DEFAULT_TIMEOUT_MS = 2_000
+const DEFAULT_INTERVAL_MS = 100;
+const DEFAULT_TIMEOUT_MS = 5_000;
 
-export async function waitFor<T>(
-  callback: () => Promise<T | false | null | undefined> | T | false | null | undefined,
+export async function waitForValue<T>(
+  fn: () => Promise<T | false | null | undefined> | T | false | null | undefined,
   options: WaitForOptions = {},
 ): Promise<T> {
-  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS
-  const intervalMs = options.intervalMs ?? DEFAULT_INTERVAL_MS
-  const message = options.message ?? 'Condition did not become truthy.'
-  const deadline = Date.now() + timeoutMs
+  const intervalMs = options.intervalMs ?? DEFAULT_INTERVAL_MS;
+  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const startTime = Date.now();
 
-  while (Date.now() <= deadline) {
-    const result = await callback()
-    if (result) {
-      return result
+  let lastError: unknown;
+
+  while (Date.now() - startTime <= timeoutMs) {
+    try {
+      const result = await fn();
+      if (result !== false && result !== null && result !== undefined) {
+        return result;
+      }
+    } catch (error) {
+      lastError = error;
     }
 
-    if (Date.now() + intervalMs > deadline) {
-      break
-    }
-
-    await sleep(intervalMs)
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
   }
 
-  throw new WaitForTimeoutError(message, timeoutMs, intervalMs)
-}
-
-export function sleep(durationMs: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, durationMs)
-  })
+  const label = options.message ?? "condition";
+  throw new WaitForTimeoutError(`Timed out waiting for ${label} after ${timeoutMs}ms.`, lastError);
 }
