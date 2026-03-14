@@ -24,7 +24,7 @@
   - depends_on: [`T3`, `T4`, `T5`]
 - [x] `T7` Update docs with manual lifecycle usage from `obsidian-e2e`
   - depends_on: [`T3`, `T4`]
-- [ ] `T8` Run validation and verify declaration output from `vp pack`
+- [x] `T8` Run validation and verify declaration output from `vp pack`
   - depends_on: [`T5`, `T6`, `T7`]
 
 ## Constraints
@@ -38,9 +38,9 @@
 
 ## Status
 
-- Completed: `T1`, `T2`, `T3`, `T4`, `T5`, `T6`, `T7`
+- Completed: `T1`, `T2`, `T3`, `T4`, `T5`, `T6`, `T7`, `T8`
 - In progress: none
-- Pending: `T8`
+- Pending: none
 
 ## Work Log
 
@@ -60,6 +60,9 @@
   `createObsidianClient`, `acquireVaultRunLock`, and
   `clearVaultRunLockMarker` from `obsidian-e2e`, and explicitly states that
   `obsidian-e2e/vitest` is not required for that path.
+- Validated the finished surface with `vp check --fix`, focused and full
+  `vp test` runs, `vp pack`, and a direct inspection of `dist/index.d.mts` to
+  confirm the main declaration barrel now exposes the lock helpers and types.
 
 ## Files Modified or Created
 

@@ -96,10 +96,43 @@ marker into the Obsidian process. That marker is not authoritative. The
 filesystem lock is the source of truth, and the app marker is only there to
 help humans understand which run currently owns the vault.
 
-For lock diagnostics, `obsidian-e2e/vitest` also exports:
+For manual lifecycle setups, the same lock helpers are available directly from
+the main package, so `obsidian-e2e/vitest` is not required:
 
 ```ts
-import { inspectVaultRunLock, readVaultRunLockMarker } from "obsidian-e2e/vitest";
+import {
+  acquireVaultRunLock,
+  clearVaultRunLockMarker,
+  createObsidianClient,
+  type ObsidianClient,
+  type VaultRunLock,
+} from "obsidian-e2e";
+
+let obsidian: ObsidianClient;
+let lock: VaultRunLock;
+
+beforeAll(async () => {
+  obsidian = createObsidianClient({ vault: "dev" });
+  await obsidian.verify();
+
+  lock = await acquireVaultRunLock({
+    vaultName: "dev",
+    vaultPath: await obsidian.vaultPath(),
+  });
+
+  await lock.publishMarker(obsidian);
+});
+
+afterAll(async () => {
+  await clearVaultRunLockMarker(obsidian);
+  await lock.release();
+});
+```
+
+For lock diagnostics, both `obsidian-e2e` and `obsidian-e2e/vitest` export:
+
+```ts
+import { inspectVaultRunLock, readVaultRunLockMarker } from "obsidian-e2e";
 
 const state = await inspectVaultRunLock({
   vaultPath: "/absolute/path/to/dev-vault",

@@ -1,6 +1,11 @@
 export { createObsidianTest } from "./fixtures/create-obsidian-test";
 export { createPluginTest } from "./fixtures/create-plugin-test";
-export { inspectVaultRunLock, readVaultRunLockMarker } from "./fixtures/vault-lock";
+export {
+  acquireVaultRunLock,
+  clearVaultRunLockMarker,
+  inspectVaultRunLock,
+  readVaultRunLockMarker,
+} from "./fixtures/vault-lock";
 export type {
   CreatePluginTestOptions,
   CreateObsidianTestOptions,
@@ -12,4 +17,9 @@ export type {
   VaultSeed,
   VaultSeedEntry,
 } from "./fixtures/types";
-export type { VaultRunLockMetadata, VaultRunLockState } from "./fixtures/vault-lock";
+export type {
+  AcquireVaultRunLockOptions,
+  VaultRunLock,
+  VaultRunLockMetadata,
+  VaultRunLockState,
+} from "./fixtures/vault-lock";

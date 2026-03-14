@@ -42,7 +42,7 @@ export interface VaultRunLockState {
   metadata: VaultRunLockMetadata;
 }
 
-interface AcquireVaultRunLockOptions extends SharedVaultLockOptions {
+export interface AcquireVaultRunLockOptions extends SharedVaultLockOptions {
   vaultName: string;
   vaultPath: string;
 }
