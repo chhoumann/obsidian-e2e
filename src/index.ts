@@ -29,6 +29,8 @@ export type {
   PluginHandle,
   PluginDataPredicate,
   PluginReloadOptions,
+  PluginUpdateDataOptions,
+  PluginWithPatchedDataOptions,
   RestartAppOptions,
   SandboxApi,
   TabsOptions,

@@ -6,7 +6,7 @@
 - [ ] T2 Metadata Cache Service
 - [x] T3 Note Model + YAML Serializer
 - [ ] T4 Sandbox Note/Frontmatter API
-- [ ] T5 Plugin Data Ergonomics
+- [x] T5 Plugin Data Ergonomics
 - [ ] T6 Public Test Context
 - [ ] T7 Obsidian Waits + Matchers
 - [ ] T8 Failure Artifact Expansion
@@ -311,6 +311,15 @@ Validation:
 - Added dedicated note-document tests for no-frontmatter notes, frontmatter
   parsing, newline normalization, empty-body behavior, deterministic
   stringification, and invalid frontmatter shape handling.
+- Completed T5 by adding `plugin.updateDataAndReload()` and
+  `plugin.withPatchedData()` on `PluginHandle`, both built on top of the
+  existing `plugin.data().patch()`, `plugin.reload()`, and `plugin.restoreData()`
+  primitives.
+- Added defaults so these ergonomics only reload/wait when the plugin is
+  already enabled, and `withPatchedData()` always attempts restore in `finally`,
+  including when callback execution fails.
+- Added focused plugin tests for enabled/disabled reload behavior, default
+  readiness waiting, and restore-on-failure semantics.
 
 ## Files Modified Or Created
 
@@ -318,8 +327,14 @@ Validation:
 - `package.json`
 - `pnpm-lock.yaml`
 - `src/note/document.ts`
+- `src/plugin/plugin.ts`
+- `src/core/types.ts`
+- `src/index.ts`
 - `tests/note/document.test.ts`
+- `tests/core/plugin.test.ts`
 
 ## Errors Or Gotchas
 
-- None.
+- Existing plugin readiness tests had to be updated for the new harness-based
+  `dev.eval()` envelope format (`{ ok, value }`), since `=> true` mocks are no
+  longer valid.

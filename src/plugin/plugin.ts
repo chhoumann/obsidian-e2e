@@ -3,11 +3,14 @@ import path from "node:path";
 import { getClientInternals } from "../core/internals";
 import type {
   JsonFile,
+  JsonFileUpdater,
   ObsidianClient,
   PluginDataPredicate,
   PluginHandle,
   PluginReloadOptions,
   PluginToggleOptions,
+  PluginUpdateDataOptions,
+  PluginWithPatchedDataOptions,
   PluginWaitForDataOptions,
   PluginWaitUntilReadyOptions,
 } from "../core/types";
@@ -31,6 +34,13 @@ export function createPluginHandle(client: ObsidianClient, id: string): PluginHa
     } catch {
       return false;
     }
+  }
+
+  function withDefaultReadyReloadOptions(options: PluginReloadOptions = {}): PluginReloadOptions {
+    return {
+      ...options,
+      waitUntilReady: options.waitUntilReady ?? true,
+    };
   }
 
   return {
@@ -85,6 +95,65 @@ export function createPluginHandle(client: ObsidianClient, id: string): PluginHa
     },
     async restoreData() {
       await getClientInternals(client).restoreFile(await resolveDataPath());
+    },
+    async updateDataAndReload<T = unknown>(
+      updater: JsonFileUpdater<T>,
+      options: PluginUpdateDataOptions<T> = {},
+    ): Promise<T> {
+      const nextData = await this.data<T>().patch(updater);
+
+      if (await this.isEnabled()) {
+        await this.reload(withDefaultReadyReloadOptions(options));
+      }
+
+      return nextData;
+    },
+    async withPatchedData<T = unknown, TResult = void>(
+      updater: JsonFileUpdater<T>,
+      run: (plugin: PluginHandle) => Promise<TResult> | TResult,
+      options: PluginWithPatchedDataOptions<T> = {},
+    ): Promise<TResult> {
+      const applyReloadOptions: PluginReloadOptions = options;
+      let patchedData: T | undefined;
+      let runResult: TResult | undefined;
+      let runError: unknown;
+      let restoreError: unknown;
+
+      try {
+        patchedData = await this.updateDataAndReload<T>(updater, applyReloadOptions);
+        runResult = await run(this);
+      } catch (error) {
+        runError = error;
+      }
+
+      if (patchedData !== undefined) {
+        try {
+          await this.restoreData();
+
+          if (await this.isEnabled()) {
+            await this.reload(withDefaultReadyReloadOptions(options));
+          }
+        } catch (error) {
+          restoreError = error;
+        }
+      }
+
+      if (runError && restoreError) {
+        throw new AggregateError(
+          [runError, restoreError],
+          `Plugin "${id}" patch execution and restore both failed.`,
+        );
+      }
+
+      if (runError) {
+        throw runError;
+      }
+
+      if (restoreError) {
+        throw restoreError;
+      }
+
+      return runResult as TResult;
     },
     async waitForData<T = unknown>(
       predicate: PluginDataPredicate<T>,
