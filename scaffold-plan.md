@@ -45,7 +45,7 @@
 ## Work Log
 
 - Bootstrapped the repo using `vp create vite:library` in a temp directory and synced the generated scaffold into this repo because `vp create` would not scaffold directly into an existing git-initialized directory.
-- Completed `T2`/`T3` by renaming the package, removing the broken Vite+ config merge, wiring explicit Vite+ scripts, and defining the dual-format tsdown build plus subpath exports.
+- Completed `T2`/`T3` by renaming the package, removing the broken Vite+ config merge, wiring explicit Vite+ scripts, and defining the tsdown build plus subpath exports.
 - Completed `T4`/`T5` by adding shared core types, direct-binary transport, polling utilities, an initial Obsidian client, and focused tests for arg normalization and waiting behavior.
 - Completed `T6`/`T7` by adding filesystem-backed vault and sandbox APIs, wiring plugin `data.json` snapshot/restore support through client internals, and validating focused plugin/sandbox tests with `vp test`.
 - Completed `T8`/`T9`/`T10` by adding the Vitest fixture entrypoint, matcher registration, and the public subpath entry files.
@@ -93,4 +93,4 @@
 
 - `vp create vite:library` currently leaves a broken `vite.config.ts` migration when run against the default `create-tsdown` output, so config cleanup is part of the implementation work.
 - The generated `prepare` script caused `vp install` to prompt for hook setup, so the package scripts were cleaned up to avoid interactive install-time configuration.
-- `vp pack` currently succeeds but emits upstream warnings from Vite+/vite-plus-test internals when producing CommonJS output. The library still builds successfully; those warnings come from the current dependency stack rather than from this repository’s source.
+- A later warning-cleanup pass moved the package to ESM-only output, switched DTS generation away from experimental `tsgo`, and removed the earlier `vp pack` warnings.

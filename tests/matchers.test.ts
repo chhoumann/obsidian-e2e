@@ -5,8 +5,10 @@ import path from "node:path";
 import { afterEach, describe, expect, test } from "vite-plus/test";
 
 import "../src/matchers";
-import type { ExecResult, ObsidianClient } from "../src/core/types";
+import { createPluginHandle } from "../src/core/plugin";
+import type { ObsidianClient, WorkspaceNode, WorkspaceTab } from "../src/core/types";
 import { createVaultApi } from "../src/vault/vault";
+import { createStubObsidianClient } from "./helpers/stub-obsidian-client";
 
 const tempDirectories: string[] = [];
 
@@ -32,6 +34,50 @@ describe("obsidian-e2e matchers", () => {
     await expect(vault).toHaveFileContaining("note.md", "matcher");
     await expect(vault).toHaveJsonFile("config.json");
   });
+
+  test("asserts available commands and open tabs", async () => {
+    const obsidian = createStubClient("/tmp/vault", {
+      activeFile: "Inbox/Today.md",
+      commands: ["workspace:save", "quickadd:run-choice"],
+      editorText: "Today\nScratchpad",
+      tabs: [
+        { id: "1", title: "Scratchpad", viewType: "markdown" },
+        { id: "2", title: "Search", viewType: "search" },
+      ],
+      workspace: [
+        {
+          children: [
+            {
+              children: [],
+              id: "2",
+              label: "Scratchpad",
+              title: "Scratchpad",
+              viewType: "markdown",
+            },
+          ],
+          id: "main",
+          label: "main",
+        },
+      ],
+    });
+
+    await expect(obsidian).toHaveActiveFile("Inbox/Today.md");
+    await expect(obsidian).toHaveCommand("quickadd:run-choice");
+    await expect(obsidian).toHaveEditorTextContaining("Scratchpad");
+    await expect(obsidian).toHaveOpenTab("Scratchpad", "markdown");
+    await expect(obsidian).toHaveWorkspaceNode("main");
+  });
+
+  test("asserts plugin data equality", async () => {
+    const vaultRoot = await createVaultRoot();
+    const pluginDataPath = path.join(vaultRoot, ".obsidian", "plugins", "quickadd", "data.json");
+    await fs.mkdir(path.dirname(pluginDataPath), { recursive: true });
+    await fs.writeFile(pluginDataPath, `${JSON.stringify({ enabled: true }, null, 2)}\n`, "utf8");
+
+    const plugin = createPluginHandle(createStubClient(vaultRoot), "quickadd");
+
+    await expect(plugin).toHavePluginData({ enabled: true });
+  });
 });
 
 async function createVaultRoot(): Promise<string> {
@@ -40,34 +86,23 @@ async function createVaultRoot(): Promise<string> {
   return directory;
 }
 
-function createStubClient(vaultRoot: string): ObsidianClient {
-  return {
-    bin: "obsidian",
-    async exec(command): Promise<ExecResult> {
-      return {
-        argv: [],
-        command,
-        exitCode: 0,
-        stderr: "",
-        stdout: "",
-      };
-    },
-    async execJson() {
-      return {} as never;
-    },
-    async execText() {
-      return "";
-    },
-    plugin() {
-      throw new Error("plugin is not used in this test");
-    },
-    async vaultPath() {
-      return vaultRoot;
-    },
-    async verify() {},
-    async waitFor(callback) {
-      return (await callback()) as never;
-    },
-    vaultName: "dev",
-  };
+function createStubClient(
+  vaultRoot: string,
+  overrides: {
+    activeFile?: string | null;
+    commands?: string[];
+    editorText?: string | null;
+    tabs?: WorkspaceTab[];
+    workspace?: WorkspaceNode[];
+  } = {},
+): ObsidianClient {
+  return createStubObsidianClient({
+    activeFile: overrides.activeFile,
+    commands: overrides.commands,
+    editorText: overrides.editorText,
+    pluginFactory: createPluginHandle,
+    tabs: overrides.tabs,
+    vaultRoot,
+    workspace: overrides.workspace,
+  });
 }

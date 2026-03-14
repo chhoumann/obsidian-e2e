@@ -1,2 +1,12 @@
 export { createObsidianTest } from "./fixtures/create-obsidian-test";
-export type { CreateObsidianTestOptions, ObsidianFixtures } from "./fixtures/types";
+export { createPluginTest } from "./fixtures/create-plugin-test";
+export type {
+  CreatePluginTestOptions,
+  CreateObsidianTestOptions,
+  ObsidianFixtures,
+  ObsidianTest,
+  PluginFixtures,
+  PluginTest,
+  VaultSeed,
+  VaultSeedEntry,
+} from "./fixtures/types";

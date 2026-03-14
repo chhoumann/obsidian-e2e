@@ -2,9 +2,7 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, test } from "vite-plus/test";
-import { createPluginHandle } from "../../src/core/plugin";
-import { attachClientInternals, createRestoreManager } from "../../src/core/internals";
-import type { ExecResult, ObsidianClient } from "../../src/core/types";
+import { createStubObsidianClient } from "../helpers/stub-obsidian-client";
 
 const tempDirectories: string[] = [];
 
@@ -56,40 +54,8 @@ async function createVaultRoot(): Promise<string> {
 }
 
 function createFakeClient(vaultRoot: string) {
-  const client: ObsidianClient = {
-    bin: "obsidian",
-    async exec(command): Promise<ExecResult> {
-      return {
-        argv: [],
-        command,
-        exitCode: 0,
-        stderr: "",
-        stdout: "",
-      };
-    },
-    async execJson() {
-      return {} as never;
-    },
-    async execText() {
-      return "";
-    },
-    plugin(id: string) {
-      return createPluginHandle(client, id);
-    },
-    async vaultPath() {
-      return vaultRoot;
-    },
-    async verify() {},
-    async waitFor(callback) {
-      return (await callback()) as never;
-    },
-    vaultName: "dev",
-  };
-
-  attachClientInternals(
-    client,
-    createRestoreManager((filePath) => fs.readFile(filePath, "utf8")),
-  );
-
-  return client;
+  return createStubObsidianClient({
+    readFileForRestore: (filePath) => fs.readFile(filePath, "utf8"),
+    vaultRoot,
+  });
 }

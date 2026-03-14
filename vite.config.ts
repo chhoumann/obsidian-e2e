@@ -7,15 +7,16 @@ export default defineConfig({
   pack: {
     clean: true,
     deps: {
-      neverBundle: ["vite-plus/test"],
+      neverBundle: ["vite-plus", "vite-plus/test", "@voidzero-dev/vite-plus-test"],
+      onlyBundle: false,
     },
     dts: {
-      tsgo: true,
+      resolver: "tsc",
     },
     entry: ["src/index.ts", "src/vitest.ts", "src/matchers.ts"],
     exports: false,
     fixedExtension: true,
-    format: ["esm", "cjs"],
+    format: ["esm"],
     platform: "node",
     sourcemap: true,
     target: ["node20.19"],

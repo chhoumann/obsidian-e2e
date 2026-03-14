@@ -1,7 +1,7 @@
 import path from "node:path";
 
 import { getClientInternals } from "../core/internals";
-import type { JsonFile, ObsidianClient, PluginHandle } from "../core/types";
+import type { JsonFile, ObsidianClient, PluginHandle, PluginToggleOptions } from "../core/types";
 import { createJsonFile } from "../vault/json-file";
 
 export function createPluginHandle(client: ObsidianClient, id: string): PluginHandle {
@@ -33,6 +33,18 @@ export function createPluginHandle(client: ObsidianClient, id: string): PluginHa
     },
     async dataPath() {
       return resolveDataPath();
+    },
+    async disable(options: PluginToggleOptions = {}) {
+      await client.exec("plugin:disable", {
+        filter: options.filter,
+        id,
+      });
+    },
+    async enable(options: PluginToggleOptions = {}) {
+      await client.exec("plugin:enable", {
+        filter: options.filter,
+        id,
+      });
     },
     id,
     async isEnabled() {

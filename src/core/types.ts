@@ -28,6 +28,39 @@ export interface WaitForOptions {
   timeoutMs?: number;
 }
 
+export interface CommandListOptions {
+  filter?: string;
+}
+
+export interface OpenFileOptions {
+  file?: string;
+  newTab?: boolean;
+  path?: string;
+}
+
+export interface OpenTabOptions {
+  file?: string;
+  group?: string;
+  view?: string;
+}
+
+export interface PluginToggleOptions {
+  filter?: "community" | "core";
+}
+
+export interface RestartAppOptions {
+  readyOptions?: WaitForOptions;
+  waitUntilReady?: boolean;
+}
+
+export interface TabsOptions {
+  ids?: boolean;
+}
+
+export interface WorkspaceOptions {
+  ids?: boolean;
+}
+
 export type JsonFileUpdater<T> = (draft: T) => Promise<T | void> | T | void;
 
 export interface JsonFile<T = unknown> {
@@ -41,15 +74,67 @@ export interface PluginHandle {
 
   data<T = unknown>(): JsonFile<T>;
   dataPath(): Promise<string>;
+  disable(options?: PluginToggleOptions): Promise<void>;
+  enable(options?: PluginToggleOptions): Promise<void>;
   isEnabled(): Promise<boolean>;
   reload(): Promise<void>;
   restoreData(): Promise<void>;
 }
 
+export interface ObsidianAppHandle {
+  reload(options?: ExecOptions): Promise<void>;
+  restart(options?: RestartAppOptions & ExecOptions): Promise<void>;
+  version(options?: ExecOptions): Promise<string>;
+  waitUntilReady(options?: WaitForOptions): Promise<void>;
+}
+
+export interface ObsidianCommandHandle {
+  readonly id: string;
+
+  exists(options?: CommandListOptions): Promise<boolean>;
+  run(options?: ExecOptions): Promise<void>;
+}
+
+export interface ObsidianDevHandle {
+  dom(options: DevDomQueryOptions, execOptions?: ExecOptions): Promise<DevDomResult>;
+  eval<T = unknown>(code: string, options?: ExecOptions): Promise<T>;
+  screenshot(path: string, options?: ExecOptions): Promise<string>;
+}
+
+export type DevDomResult = number | string | string[];
+
+export interface DevDomQueryOptions {
+  all?: boolean;
+  attr?: string;
+  css?: string;
+  inner?: boolean;
+  selector: string;
+  text?: boolean;
+  total?: boolean;
+}
+
+export interface WorkspaceNode {
+  children: WorkspaceNode[];
+  id?: string;
+  label: string;
+  title?: string;
+  viewType?: string;
+}
+
+export interface WorkspaceTab {
+  id?: string;
+  title: string;
+  viewType: string;
+}
+
 export interface ObsidianClient {
+  readonly app: ObsidianAppHandle;
   readonly bin: string;
+  readonly dev: ObsidianDevHandle;
   readonly vaultName: string;
 
+  command(id: string): ObsidianCommandHandle;
+  commands(options?: CommandListOptions, execOptions?: ExecOptions): Promise<string[]>;
   exec(
     command: string,
     args?: Record<string, ObsidianArg>,
@@ -65,13 +150,17 @@ export interface ObsidianClient {
     args?: Record<string, ObsidianArg>,
     options?: ExecOptions,
   ): Promise<string>;
+  open(options: OpenFileOptions, execOptions?: ExecOptions): Promise<void>;
+  openTab(options?: OpenTabOptions, execOptions?: ExecOptions): Promise<void>;
   plugin(id: string): PluginHandle;
+  tabs(options?: TabsOptions, execOptions?: ExecOptions): Promise<WorkspaceTab[]>;
   vaultPath(): Promise<string>;
   verify(): Promise<void>;
   waitFor<T>(
     fn: () => Promise<T | false | null | undefined> | T | false | null | undefined,
     options?: WaitForOptions,
   ): Promise<T>;
+  workspace(options?: WorkspaceOptions, execOptions?: ExecOptions): Promise<WorkspaceNode[]>;
 }
 
 export interface CreateObsidianClientOptions {
