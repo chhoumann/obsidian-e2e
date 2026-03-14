@@ -1,6 +1,7 @@
 import { describe, expect, test, vi } from "vite-plus/test";
 
 import { createObsidianClient } from "../../src/core/client";
+import { mergeExecOptions } from "../../src/core/exec-options";
 import type { CommandTransport } from "../../src/core/types";
 
 describe("createObsidianClient", () => {
@@ -118,6 +119,192 @@ describe("createObsidianClient", () => {
     expect(transport).toHaveBeenCalledWith(
       expect.objectContaining({
         argv: ["vault=dev", "command", "id=workspace:save"],
+      }),
+    );
+  });
+
+  test("merges default exec options into command requests", async () => {
+    const transport = vi.fn<CommandTransport>().mockResolvedValue({
+      argv: ["vault=dev", "version"],
+      command: "obsidian",
+      exitCode: 0,
+      stderr: "",
+      stdout: "1.8.10\n",
+    });
+
+    const client = createObsidianClient({
+      defaultExecOptions: {
+        allowNonZeroExit: true,
+        cwd: "/tmp/default",
+        env: {
+          BASE: "1",
+        },
+        timeoutMs: 1000,
+      },
+      transport,
+      vault: "dev",
+    });
+
+    await client.app.version({
+      env: {
+        EXTRA: "2",
+      },
+      timeoutMs: 250,
+    });
+
+    expect(transport).toHaveBeenCalledWith(
+      expect.objectContaining({
+        allowNonZeroExit: true,
+        argv: ["vault=dev", "version"],
+        cwd: "/tmp/default",
+        env: {
+          BASE: "1",
+          EXTRA: "2",
+        },
+        timeoutMs: 250,
+      }),
+    );
+  });
+
+  test("applies default exec options to plugin and command handles", async () => {
+    const transport = vi.fn<CommandTransport>().mockImplementation(async (request) => {
+      if (request.argv[1] === "plugin:reload" || request.argv[1] === "command") {
+        return {
+          argv: request.argv,
+          command: request.bin,
+          exitCode: 0,
+          stderr: "",
+          stdout: "",
+        };
+      }
+
+      throw new Error(`Unhandled request: ${request.argv.join(" ")}`);
+    });
+
+    const client = createObsidianClient({
+      defaultExecOptions: {
+        cwd: "/tmp/default",
+        env: {
+          BASE: "1",
+        },
+      },
+      transport,
+      vault: "dev",
+    });
+
+    await client.plugin("quickadd").reload({
+      env: {
+        EXTRA: "2",
+      },
+    });
+    await client.command("workspace:save").run();
+
+    expect(transport).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        argv: ["vault=dev", "plugin:reload", "id=quickadd"],
+        cwd: "/tmp/default",
+        env: {
+          BASE: "1",
+          EXTRA: "2",
+        },
+      }),
+    );
+    expect(transport).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        argv: ["vault=dev", "command", "id=workspace:save"],
+        cwd: "/tmp/default",
+        env: {
+          BASE: "1",
+        },
+      }),
+    );
+  });
+
+  test("applies default exec options to command and dev helpers", async () => {
+    const transport = vi.fn<CommandTransport>().mockResolvedValue({
+      argv: [],
+      command: "obsidian",
+      exitCode: 0,
+      stderr: "",
+      stdout: "",
+    });
+
+    const client = createObsidianClient({
+      defaultExecOptions: {
+        allowNonZeroExit: true,
+        cwd: "/tmp/default",
+        timeoutMs: 1000,
+      },
+      transport,
+      vault: "dev",
+    });
+
+    await client.command("workspace:save").run();
+    await client.dev.screenshot("/tmp/shot.png", {
+      timeoutMs: 250,
+    });
+
+    expect(transport).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        allowNonZeroExit: true,
+        argv: ["vault=dev", "command", "id=workspace:save"],
+        cwd: "/tmp/default",
+        timeoutMs: 1000,
+      }),
+    );
+    expect(transport).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        allowNonZeroExit: true,
+        argv: ["vault=dev", "dev:screenshot", "path=/tmp/shot.png"],
+        cwd: "/tmp/default",
+        timeoutMs: 250,
+      }),
+    );
+  });
+
+  test("applies default exec options to verify requests", async () => {
+    const transport = vi.fn<CommandTransport>().mockImplementation(async (request) => {
+      if (request.argv[0] === "--help") {
+        return {
+          argv: request.argv,
+          command: request.bin,
+          exitCode: 0,
+          stderr: "",
+          stdout: "usage\n",
+        };
+      }
+
+      return {
+        argv: request.argv,
+        command: request.bin,
+        exitCode: 0,
+        stderr: "",
+        stdout: "/tmp/vault\n",
+      };
+    });
+
+    const client = createObsidianClient({
+      defaultExecOptions: {
+        allowNonZeroExit: true,
+        cwd: "/tmp/default",
+        timeoutMs: 1000,
+      },
+      transport,
+      vault: "dev",
+    });
+
+    await client.verify();
+
+    expect(transport).toHaveBeenCalledWith(
+      expect.objectContaining({
+        allowNonZeroExit: true,
+        argv: ["--help"],
+        cwd: "/tmp/default",
+        timeoutMs: 1000,
       }),
     );
   });
@@ -249,6 +436,46 @@ describe("createObsidianClient", () => {
     ).resolves.toEqual(["Files", "Search", "Bookmarks"]);
     await expect(client.dev.dom({ selector: ".workspace-tab", total: true })).resolves.toBe(3);
     await expect(client.dev.screenshot("/tmp/shot.png")).resolves.toBe("/tmp/shot.png");
+  });
+
+  test("provides a first-class sleep helper", async () => {
+    const client = createObsidianClient({
+      transport: vi.fn<CommandTransport>().mockResolvedValue({
+        argv: [],
+        command: "obsidian",
+        exitCode: 0,
+        stderr: "",
+        stdout: "",
+      }),
+      vault: "dev",
+    });
+
+    await expect(client.sleep(5)).resolves.toBeUndefined();
+  });
+
+  test("exports a reusable exec option merge helper", () => {
+    expect(
+      mergeExecOptions(
+        {
+          allowNonZeroExit: true,
+          cwd: "/tmp/default",
+          env: { BASE: "1" },
+          timeoutMs: 100,
+        },
+        {
+          env: { EXTRA: "2" },
+          timeoutMs: 50,
+        },
+      ),
+    ).toEqual({
+      allowNonZeroExit: true,
+      cwd: "/tmp/default",
+      env: {
+        BASE: "1",
+        EXTRA: "2",
+      },
+      timeoutMs: 50,
+    });
   });
 
   test("parses tab listings into structured summaries", async () => {

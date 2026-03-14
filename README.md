@@ -338,6 +338,27 @@ part of the set: desktop permissions, display availability, or Obsidian state
 can prevent `screenshot.png` from being produced, in which case you should
 expect `screenshot.error.txt` instead.
 
+If you are not using the Vitest fixtures, the same artifact capture path is
+available directly from the main package:
+
+```ts
+import { captureFailureArtifacts, createObsidianClient } from "obsidian-e2e";
+
+const obsidian = createObsidianClient({ vault: "dev" });
+
+await captureFailureArtifacts(
+  {
+    id: "quickadd_case_1234abcd",
+    name: "captures quickadd diagnostics",
+  },
+  obsidian,
+  {
+    captureOnFailure: true,
+    plugin: obsidian.plugin("quickadd"),
+  },
+);
+```
+
 ## Maintainer CI And Releases
 
 This repo now ships with a hardened CI and release flow built around Vite+
@@ -406,15 +427,25 @@ test("asserts active Obsidian state", async ({ obsidian, plugin }) => {
 If you need to work below the fixture layer:
 
 ```ts
-import { createObsidianClient } from "obsidian-e2e";
+import { createObsidianClient, createVaultApi } from "obsidian-e2e";
 
 const obsidian = createObsidianClient({
   vault: "dev",
   bin: "obsidian",
+  defaultExecOptions: {
+    allowNonZeroExit: true,
+  },
 });
+const vault = createVaultApi({ obsidian });
 
 await obsidian.verify();
-await obsidian.exec("plugin:reload", { id: "my-plugin" });
+await vault.write("Inbox/Today.md", "# Today\n", { waitForContent: true });
+await obsidian.plugin("my-plugin").reload({
+  waitUntilReady: true,
+  readyOptions: {
+    commandId: "my-plugin:refresh",
+  },
+});
 ```
 
 ## App And Commands
@@ -436,6 +467,7 @@ to the real `obsidian` CLI:
 - `obsidian.workspace()`
 - `obsidian.open({ file? | path?, newTab? })`
 - `obsidian.openTab({ file?, group?, view? })`
+- `obsidian.sleep(ms)`
 
 Example:
 
@@ -462,6 +494,38 @@ test("reloads the app and runs a plugin command when it becomes available", asyn
 
 `obsidian.app.restart()` waits for the app to come back by default. Pass
 `{ waitUntilReady: false }` if you need to manage readiness explicitly.
+
+## Vault And Plugin Wait Helpers
+
+The higher-level vault and plugin handles now expose the most common polling
+patterns directly, so tests do not need to hand-roll `waitFor()` loops around
+content reads, command discovery, or plugin data migration:
+
+```ts
+test("waits for generated content and plugin state", async ({ obsidian, vault }) => {
+  const plugin = obsidian.plugin("quickadd");
+
+  await vault.write("queue.md", "pending", {
+    waitForContent: true,
+  });
+
+  await vault.waitForContent("queue.md", (content) => content.includes("pending"));
+
+  await plugin.reload({
+    waitUntilReady: true,
+    readyOptions: {
+      commandId: "quickadd:run-choice",
+    },
+  });
+
+  await plugin.waitForData<{ migrations: Record<string, boolean> }>(
+    (data) => data.migrations.quickadd_v2 === true,
+  );
+});
+```
+
+If you just need time to pass without inventing a fake polling condition, use
+`await obsidian.sleep(ms)`.
 
 Workspace and tab readers return parsed structures, so you can inspect layout
 state without writing custom parsers in every test:

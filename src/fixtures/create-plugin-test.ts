@@ -1,12 +1,10 @@
-import { mkdir, writeFile } from "node:fs/promises";
-import path from "node:path";
-
 import { test as base } from "vite-plus/test";
 import type { TestContext } from "vite-plus/test";
 
 import { getClientInternals } from "../core/internals";
-import type { ObsidianClient } from "../core/types";
+import type { ObsidianClient, VaultApi } from "../core/types";
 import { createVaultApi } from "../vault/vault";
+import { resolveFilesystemPath } from "../vault/paths";
 import { createBaseFixtures, type BaseFixtureState } from "./base-fixtures";
 import { registerPluginFailureArtifacts } from "./failure-artifacts";
 import type {
@@ -63,30 +61,28 @@ export function createPluginTest(options: CreatePluginTestOptions): PluginTest {
 }
 
 async function applyVaultSeed(obsidian: ObsidianClient, seedVault: VaultSeed): Promise<void> {
-  const vaultRoot = await obsidian.vaultPath();
+  const vault = createVaultApi({ obsidian });
 
   for (const [targetPath, value] of Object.entries(seedVault)) {
-    const resolvedPath = path.resolve(vaultRoot, ...targetPath.split("/").filter(Boolean));
-    const normalizedVaultRoot = path.resolve(vaultRoot);
-
-    if (
-      resolvedPath !== normalizedVaultRoot &&
-      !resolvedPath.startsWith(`${normalizedVaultRoot}${path.sep}`)
-    ) {
-      throw new Error(`Seed path escapes the vault root: ${targetPath}`);
-    }
-
+    const resolvedPath = await resolveFilesystemPath(obsidian, "", targetPath);
     await getClientInternals(obsidian).snapshotFileOnce(resolvedPath);
-    await mkdir(path.dirname(resolvedPath), { recursive: true });
-    await writeSeedValue(resolvedPath, value);
+    await writeSeedValue(vault, targetPath, value);
   }
 }
 
-async function writeSeedValue(resolvedPath: string, value: VaultSeedEntry): Promise<void> {
+async function writeSeedValue(
+  vault: VaultApi,
+  targetPath: string,
+  value: VaultSeedEntry,
+): Promise<void> {
   if (typeof value === "string") {
-    await writeFile(resolvedPath, value, "utf8");
+    await vault.write(targetPath, value, {
+      waitForContent: true,
+    });
     return;
   }
 
-  await writeFile(resolvedPath, `${JSON.stringify(value.json, null, 2)}\n`, "utf8");
+  await vault.write(targetPath, `${JSON.stringify(value.json, null, 2)}\n`, {
+    waitForContent: true,
+  });
 }

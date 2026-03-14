@@ -4,6 +4,7 @@ import type {
   DevDomResult,
   ExecResult,
   ObsidianClient,
+  WaitForOptions,
   PluginHandle,
   WorkspaceNode,
   WorkspaceTab,
@@ -22,6 +23,10 @@ interface CreateStubObsidianClientOptions {
   readFileForRestore?: (filePath: string) => Promise<string>;
   tabs?: WorkspaceTab[];
   vaultRoot: string;
+  waitFor?: <T>(
+    callback: () => Promise<T | false | null | undefined> | T | false | null | undefined,
+    options?: WaitForOptions,
+  ) => Promise<T>;
   workspace?: WorkspaceNode[];
 }
 
@@ -102,6 +107,7 @@ export function createStubObsidianClient(options: CreateStubObsidianClientOption
     plugin(id: string) {
       return (options.pluginFactory ?? createPluginHandle)(client, id);
     },
+    async sleep() {},
     async tabs() {
       return tabs;
     },
@@ -109,7 +115,11 @@ export function createStubObsidianClient(options: CreateStubObsidianClientOption
       return options.vaultRoot;
     },
     async verify() {},
-    async waitFor(callback) {
+    async waitFor(callback, waitOptions) {
+      if (options.waitFor) {
+        return options.waitFor(callback, waitOptions);
+      }
+
       return (await callback()) as never;
     },
     async workspace() {

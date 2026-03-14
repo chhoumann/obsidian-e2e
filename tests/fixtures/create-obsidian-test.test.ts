@@ -5,7 +5,8 @@ import path from "node:path";
 import { afterAll, beforeAll, expect } from "vite-plus/test";
 
 import { createObsidianTest } from "../../src/vitest";
-import type { CommandTransport, ExecResult } from "../../src/core/types";
+import { createExecResult } from "../helpers/create-exec-result";
+import type { CommandTransport } from "../../src/core/types";
 
 let sandboxRootPath = "";
 const sharedLockRoot = path.join(os.tmpdir(), `obsidian-e2e-shared-lock-${process.pid}`);
@@ -71,7 +72,7 @@ fixtureTest(
 function createTransport(): CommandTransport {
   return async (request) => {
     if (request.argv[0] === "--help") {
-      return createResult(request.bin, request.argv, "usage\n");
+      return createExecResult(request.bin, request.argv, "usage\n");
     }
 
     const [, command, ...rest] = request.argv;
@@ -85,36 +86,26 @@ function createTransport(): CommandTransport {
     );
 
     if (command === "vault" && args.info === "path") {
-      return createResult(request.bin, request.argv, `${vaultRoot}\n`);
+      return createExecResult(request.bin, request.argv, `${vaultRoot}\n`);
     }
 
     if (command === "vault" && args.info === "name") {
-      return createResult(request.bin, request.argv, "dev\n");
+      return createExecResult(request.bin, request.argv, "dev\n");
     }
 
     if (command === "plugin") {
-      return createResult(request.bin, request.argv, "enabled\ttrue\n");
+      return createExecResult(request.bin, request.argv, "enabled\ttrue\n");
     }
 
     if (command === "plugin:reload") {
-      return createResult(request.bin, request.argv, "");
+      return createExecResult(request.bin, request.argv, "");
     }
 
     if (command === "eval") {
       evalCalls.push(String(args.code ?? ""));
-      return createResult(request.bin, request.argv, "{}\n");
+      return createExecResult(request.bin, request.argv, "{}\n");
     }
 
     throw new Error(`Unhandled transport request: ${request.argv.join(" ")}`);
-  };
-}
-
-function createResult(command: string, argv: string[], stdout: string): ExecResult {
-  return {
-    argv,
-    command,
-    exitCode: 0,
-    stderr: "",
-    stdout,
   };
 }

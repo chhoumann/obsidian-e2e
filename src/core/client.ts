@@ -1,4 +1,5 @@
 import { buildCommandArgv } from "./args";
+import { mergeExecOptions } from "./exec-options";
 import { attachClientInternals, createRestoreManager } from "./internals";
 import { createPluginHandle } from "../plugin/plugin";
 import { executeCommand } from "./transport";
@@ -22,10 +23,11 @@ import type {
   WorkspaceOptions,
   WorkspaceTab,
 } from "./types";
-import { waitForValue } from "./wait";
+import { sleep, waitForValue } from "./wait";
 
 export function createObsidianClient(options: CreateObsidianClientOptions): ObsidianClient {
   const transport = options.transport ?? executeCommand;
+  const defaultExecOptions = options.defaultExecOptions;
   const waitDefaults = {
     intervalMs: options.intervalMs,
     timeoutMs: options.timeoutMs,
@@ -155,7 +157,7 @@ export function createObsidianClient(options: CreateObsidianClientOptions): Obsi
     },
     exec(command: string, args: Record<string, ObsidianArg> = {}, execOptions: ExecOptions = {}) {
       return transport({
-        ...execOptions,
+        ...mergeExecOptions(defaultExecOptions, execOptions),
         argv: buildCommandArgv(options.vault, command, args),
         bin: this.bin,
       });
@@ -201,6 +203,9 @@ export function createObsidianClient(options: CreateObsidianClientOptions): Obsi
     plugin(id: string) {
       return createPluginHandle(this, id);
     },
+    sleep(ms: number) {
+      return sleep(ms);
+    },
     async tabs(
       tabOptions: TabsOptions = {},
       execOptions: ExecOptions = {},
@@ -223,6 +228,7 @@ export function createObsidianClient(options: CreateObsidianClientOptions): Obsi
     },
     async verify() {
       await transport({
+        ...mergeExecOptions(defaultExecOptions, undefined),
         argv: ["--help"],
         bin: this.bin,
       });

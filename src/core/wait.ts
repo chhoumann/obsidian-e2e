@@ -4,6 +4,10 @@ import type { WaitForOptions } from "./types";
 const DEFAULT_INTERVAL_MS = 100;
 const DEFAULT_TIMEOUT_MS = 5_000;
 
+export async function sleep(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export async function waitForValue<T>(
   fn: () => Promise<T | false | null | undefined> | T | false | null | undefined,
   options: WaitForOptions = {},
@@ -24,7 +28,7 @@ export async function waitForValue<T>(
       lastError = error;
     }
 
-    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+    await sleep(intervalMs);
   }
 
   const label = options.message ?? "condition";
