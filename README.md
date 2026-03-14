@@ -113,6 +113,39 @@ returns the current metadata, lock directory, heartbeat age, and stale status.
 `readVaultRunLockMarker()` reads the best-effort marker from the running
 Obsidian app.
 
+If you prefer manual `beforeAll` / `afterAll` lifecycle, you can import the
+lock helpers directly from `obsidian-e2e`. You do not need
+`obsidian-e2e/vitest` for that usage:
+
+```ts
+import { afterAll, beforeAll } from "vite-plus/test";
+import {
+  acquireVaultRunLock,
+  clearVaultRunLockMarker,
+  createObsidianClient,
+  type VaultRunLock,
+} from "obsidian-e2e";
+
+const obsidian = createObsidianClient({ vault: "dev" });
+let vaultLock: VaultRunLock | undefined;
+
+beforeAll(async () => {
+  await obsidian.verify();
+
+  vaultLock = await acquireVaultRunLock({
+    vaultName: obsidian.vaultName,
+    vaultPath: await obsidian.vaultPath(),
+  });
+
+  await vaultLock.publishMarker(obsidian);
+});
+
+afterAll(async () => {
+  await clearVaultRunLockMarker(obsidian);
+  await vaultLock?.release();
+});
+```
+
 Within one worker/process, reacquiring the same shared-vault lock is reentrant:
 the existing lease is reused instead of contending against itself. Across
 different processes or worktrees, contention still serializes access through
