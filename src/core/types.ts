@@ -2,6 +2,8 @@ export type ObsidianArg = boolean | number | string | null | undefined
 
 export interface ExecOptions {
   allowNonZeroExit?: boolean
+  cwd?: string
+  env?: NodeJS.ProcessEnv
   timeoutMs?: number
 }
 
@@ -13,17 +15,25 @@ export interface ExecResult {
   stdout: string
 }
 
+export interface ExecuteRequest extends ExecOptions {
+  argv: string[]
+  bin: string
+}
+
+export type CommandTransport = (request: ExecuteRequest) => Promise<ExecResult>
+
 export interface WaitForOptions {
   intervalMs?: number
   message?: string
   timeoutMs?: number
 }
 
+export type JsonFileUpdater<T> = (draft: T) => Promise<T | void> | T | void
+
 export interface JsonFile<T = unknown> {
-  path(): Promise<string> | string
+  patch(updater: JsonFileUpdater<T>): Promise<T>
   read(): Promise<T>
   write(value: T): Promise<void>
-  patch(updater: (draft: T) => T | void): Promise<T>
 }
 
 export interface PluginHandle {
@@ -33,30 +43,7 @@ export interface PluginHandle {
   dataPath(): Promise<string>
   isEnabled(): Promise<boolean>
   reload(): Promise<void>
-}
-
-export interface VaultApi {
-  delete(path: string, options?: { permanent?: boolean }): Promise<void>
-  exists(path: string): Promise<boolean>
-  json<T = unknown>(path: string): JsonFile<T>
-  mkdir(path: string): Promise<void>
-  read(path: string): Promise<string>
-  waitForExists(path: string, options?: WaitForOptions): Promise<void>
-  waitForMissing(path: string, options?: WaitForOptions): Promise<void>
-  write(path: string, content: string): Promise<void>
-}
-
-export interface SandboxApi extends VaultApi {
-  readonly root: string
-
-  path(...segments: string[]): string
-}
-
-export interface ObsidianClientOptions {
-  bin?: string
-  intervalMs?: number
-  timeoutMs?: number
-  vault: string
+  restoreData(): Promise<void>
 }
 
 export interface ObsidianClient {
@@ -82,7 +69,37 @@ export interface ObsidianClient {
   vaultPath(): Promise<string>
   verify(): Promise<void>
   waitFor<T>(
-    callback: () => Promise<T | false | null | undefined> | T | false | null | undefined,
+    fn: () => Promise<T | false | null | undefined> | T | false | null | undefined,
     options?: WaitForOptions,
   ): Promise<T>
+}
+
+export interface CreateObsidianClientOptions {
+  bin?: string
+  intervalMs?: number
+  timeoutMs?: number
+  transport?: CommandTransport
+  vault: string
+}
+
+export interface DeleteOptions {
+  permanent?: boolean
+}
+
+export interface VaultApi {
+  delete(path: string, options?: DeleteOptions): Promise<void>
+  exists(path: string): Promise<boolean>
+  json<T = unknown>(path: string): JsonFile<T>
+  mkdir(path: string): Promise<void>
+  read(path: string): Promise<string>
+  waitForExists(path: string, options?: WaitForOptions): Promise<void>
+  waitForMissing(path: string, options?: WaitForOptions): Promise<void>
+  write(path: string, content: string): Promise<void>
+}
+
+export interface SandboxApi extends VaultApi {
+  readonly root: string
+
+  cleanup(): Promise<void>
+  path(...segments: string[]): string
 }

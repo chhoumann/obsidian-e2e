@@ -1,64 +1,71 @@
 import { buildCommandArgv } from './args'
-import { createPluginHandle } from './plugin'
-import { runObsidianCommand } from './transport'
-import { waitFor } from './wait'
-import type {
-  ExecOptions,
-  ObsidianArg,
-  ObsidianClient,
-  ObsidianClientOptions,
-} from './types'
+import { attachClientInternals, createRestoreManager } from './internals'
+import { createPluginHandle } from '../plugin/plugin'
+import { executeCommand } from './transport'
+import type { CreateObsidianClientOptions, ObsidianClient } from './types'
+import { waitForValue } from './wait'
 
 export function createObsidianClient(
-  options: ObsidianClientOptions,
+  options: CreateObsidianClientOptions,
 ): ObsidianClient {
-  const bin = options.bin ?? 'obsidian'
+  const transport = options.transport ?? executeCommand
+  const waitDefaults = {
+    intervalMs: options.intervalMs,
+    timeoutMs: options.timeoutMs,
+  }
 
-  return {
-    bin,
-    vaultName: options.vault,
-    async exec(
-      command: string,
-      args: Record<string, ObsidianArg> = {},
-      execOptions: ExecOptions = {},
-    ) {
-      const argv = buildCommandArgv(options.vault, command, args)
-      return runObsidianCommand(bin, command, argv, {
-        timeoutMs: execOptions.timeoutMs ?? options.timeoutMs,
-        allowNonZeroExit: execOptions.allowNonZeroExit,
+  const restoreManager = createRestoreManager(async (filePath) => {
+    const { readFile } = await import('node:fs/promises')
+    return readFile(filePath, 'utf8')
+  })
+
+  let cachedVaultPath: string | undefined
+
+  const client: ObsidianClient = {
+    bin: options.bin ?? 'obsidian',
+    exec(command, args, execOptions) {
+      return transport({
+        ...execOptions,
+        argv: buildCommandArgv(options.vault, command, args),
+        bin: this.bin,
       })
     },
-    async execJson<T = unknown>(
-      command: string,
-      args: Record<string, ObsidianArg> = {},
-      execOptions: ExecOptions = {},
-    ) {
-      const stdout = await this.execText(command, args, execOptions)
-      return JSON.parse(stdout) as T
+    async execJson<T = unknown>(command, args, execOptions) {
+      const output = await this.execText(command, args, execOptions)
+      return JSON.parse(output) as T
     },
-    async execText(
-      command: string,
-      args: Record<string, ObsidianArg> = {},
-      execOptions: ExecOptions = {},
-    ) {
+    async execText(command, args, execOptions) {
       const result = await this.exec(command, args, execOptions)
-      return result.stdout
+      return result.stdout.trimEnd()
     },
-    plugin(id: string) {
+    plugin(id) {
       return createPluginHandle(this, id)
     },
     async vaultPath() {
-      return this.execText('vault', { info: 'path' })
+      if (!cachedVaultPath) {
+        cachedVaultPath = await this.execText('vault', { info: 'path' })
+      }
+
+      return cachedVaultPath
     },
     async verify() {
-      await this.execText('vault', { info: 'name' })
+      await transport({
+        argv: ['--help'],
+        bin: this.bin,
+      })
+
+      await this.vaultPath()
     },
-    async waitFor(callback, waitOptions = {}) {
-      return waitFor(callback, {
-        intervalMs: waitOptions.intervalMs ?? options.intervalMs,
-        message: waitOptions.message,
-        timeoutMs: waitOptions.timeoutMs ?? options.timeoutMs,
+    vaultName: options.vault,
+    waitFor(fn, waitOptions) {
+      return waitForValue(fn, {
+        ...waitDefaults,
+        ...waitOptions,
       })
     },
   }
+
+  attachClientInternals(client, restoreManager)
+
+  return client
 }
