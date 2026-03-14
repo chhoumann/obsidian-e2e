@@ -2,6 +2,9 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
+import { createInterface } from "node:readline";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { setTimeout as delay } from "node:timers/promises";
 
 import { afterEach, describe, expect, test } from "vite-plus/test";
 
@@ -14,8 +17,15 @@ import {
 import { createStubObsidianClient } from "../helpers/stub-obsidian-client";
 
 const tempDirectories: string[] = [];
+const childProcesses = new Set<ChildProcessWithoutNullStreams>();
 
 afterEach(async () => {
+  for (const child of childProcesses) {
+    if (child.exitCode === null && child.signalCode === null) {
+      child.kill("SIGKILL");
+    }
+  }
+  childProcesses.clear();
   await Promise.all(
     tempDirectories
       .splice(0)
@@ -218,10 +228,189 @@ describe("vault lock", () => {
     await lock.release();
     await expect(inspectVaultRunLock({ lockRoot, vaultPath })).resolves.toBeNull();
   });
+
+  test("serializes lock acquisition across separate processes", async () => {
+    const lockRoot = await createTempDir("obsidian-e2e-locks-");
+    const vaultPath = "/tmp/dev-vault";
+    const holder = spawnVaultLockChild("hold", lockRoot, vaultPath);
+    const holderAcquired = await holder.nextEvent("acquired");
+    const waiter = spawnVaultLockChild("acquire-and-release", lockRoot, vaultPath);
+
+    await delay(250);
+    expect(waiter.events).toEqual([]);
+
+    holder.release();
+    const holderReleased = await holder.nextEvent("released");
+    const waiterAcquired = await waiter.nextEvent("acquired");
+    const waiterReleased = await waiter.nextEvent("released");
+
+    expect(waiterAcquired.ownerId).not.toBe(holderAcquired.ownerId);
+    expect(waiterAcquired.acquiredAt).toBeGreaterThanOrEqual(holderReleased.releasedAt ?? 0);
+    expect(waiterReleased.releasedAt).toBeGreaterThanOrEqual(waiterAcquired.acquiredAt ?? 0);
+
+    await expect(holder.exit).resolves.toMatchObject({ code: 0, signal: null });
+    await expect(waiter.exit).resolves.toMatchObject({ code: 0, signal: null });
+    childProcesses.delete(holder.child);
+    childProcesses.delete(waiter.child);
+  });
+
+  test("allows another process to take over a stale lock after the holder exits", async () => {
+    const lockRoot = await createTempDir("obsidian-e2e-locks-");
+    const vaultPath = "/tmp/dev-vault";
+    const staleMs = 150;
+    const crashedHolder = spawnVaultLockChild("crash-after-acquire", lockRoot, vaultPath, staleMs);
+    const crashedAcquired = await crashedHolder.nextEvent("acquired");
+
+    await expect(crashedHolder.exit).resolves.toMatchObject({ code: 0, signal: null });
+    childProcesses.delete(crashedHolder.child);
+
+    const waiter = spawnVaultLockChild("acquire-and-release", lockRoot, vaultPath, staleMs);
+    const waiterAcquired = await waiter.nextEvent("acquired", 3_000);
+    const waiterReleased = await waiter.nextEvent("released");
+    expect(crashedAcquired.acquiredAt).toBeTypeOf("number");
+    const crashedAcquiredAt = crashedAcquired.acquiredAt ?? 0;
+
+    expect(waiterAcquired.ownerId).not.toBe(crashedAcquired.ownerId);
+    expect(waiterAcquired.acquiredAt).toBeGreaterThanOrEqual(crashedAcquiredAt + staleMs);
+    expect(waiterReleased.releasedAt).toBeGreaterThanOrEqual(waiterAcquired.acquiredAt ?? 0);
+    await expect(waiter.exit).resolves.toMatchObject({ code: 0, signal: null });
+    childProcesses.delete(waiter.child);
+  });
 });
 
 async function createTempDir(prefix: string): Promise<string> {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
   tempDirectories.push(directory);
   return directory;
+}
+
+type VaultLockChildMode = "acquire-and-release" | "crash-after-acquire" | "hold";
+
+interface VaultLockChildEvent {
+  acquiredAt?: number;
+  message?: string;
+  ownerId?: string;
+  pid?: number;
+  releasedAt?: number;
+  type: "acquired" | "error" | "released";
+}
+
+interface VaultLockChildHandle {
+  child: ChildProcessWithoutNullStreams;
+  events: VaultLockChildEvent[];
+  exit: Promise<{ code: number | null; signal: NodeJS.Signals | null }>;
+  nextEvent(type: VaultLockChildEvent["type"], timeoutMs?: number): Promise<VaultLockChildEvent>;
+  release(): void;
+}
+
+function spawnVaultLockChild(
+  mode: VaultLockChildMode,
+  lockRoot: string,
+  vaultPath: string,
+  staleMs?: number,
+): VaultLockChildHandle {
+  const child = spawn(
+    process.execPath,
+    [
+      "--experimental-strip-types",
+      path.resolve("tests/helpers/vault-lock-child.ts"),
+      mode,
+      lockRoot,
+      vaultPath,
+      ...(staleMs ? [String(staleMs)] : []),
+    ],
+    {
+      cwd: process.cwd(),
+      stdio: ["pipe", "pipe", "pipe"],
+    },
+  );
+  childProcesses.add(child);
+
+  const events: VaultLockChildEvent[] = [];
+  const pendingResolvers = new Set<() => void>();
+  const stdout = createInterface({ input: child.stdout });
+  let stderr = "";
+
+  stdout.on("line", (line) => {
+    const event = JSON.parse(line) as VaultLockChildEvent;
+    events.push(event);
+
+    for (const resolve of pendingResolvers) {
+      resolve();
+    }
+    pendingResolvers.clear();
+  });
+
+  child.stderr.setEncoding("utf8");
+  child.stderr.on("data", (chunk: string) => {
+    stderr += chunk;
+  });
+
+  const exit = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
+    child.once("exit", (code, signal) => {
+      stdout.close();
+      resolve({ code, signal });
+    });
+  });
+
+  async function nextEvent(
+    type: VaultLockChildEvent["type"],
+    timeoutMs = 2_000,
+  ): Promise<VaultLockChildEvent> {
+    const startedAt = Date.now();
+
+    while (true) {
+      const index = events.findIndex((event) => event.type === type || event.type === "error");
+
+      if (index >= 0) {
+        const event = events.splice(index, 1).at(0);
+
+        if (!event) {
+          continue;
+        }
+
+        if (event.type === "error") {
+          throw new Error(
+            `Child lock worker failed: ${event.message ?? "Unknown error"}\n${stderr}`,
+          );
+        }
+
+        return event;
+      }
+
+      if (Date.now() - startedAt >= timeoutMs) {
+        throw new Error(
+          `Timed out waiting for child ${type} event.\nstdout events: ${JSON.stringify(events)}\nstderr: ${stderr}`,
+        );
+      }
+
+      await new Promise<void>((resolve) => {
+        const wake = () => {
+          pendingResolvers.delete(wake);
+          resolve();
+        };
+
+        pendingResolvers.add(wake);
+        const remainingMs = Math.max(1, timeoutMs - (Date.now() - startedAt));
+        setTimeout(
+          () => {
+            pendingResolvers.delete(wake);
+            resolve();
+          },
+          Math.min(remainingMs, 100),
+        );
+      });
+    }
+  }
+
+  return {
+    child,
+    events,
+    exit,
+    nextEvent,
+    release() {
+      child.stdin.write("release\n");
+      child.stdin.end();
+    },
+  };
 }

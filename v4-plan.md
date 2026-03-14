@@ -27,7 +27,7 @@
   - depends_on: [`V4-6`]
 - [x] `V4-8` Add reentrancy and ownership UX hardening
   - depends_on: [`V4-5`, `V4-7`]
-- [ ] `V4-9` Add a real multi-process integration smoke path
+- [x] `V4-9` Add a real multi-process integration smoke path
   - depends_on: [`V4-5`, `V4-6`]
 
 ## First Slice
@@ -54,9 +54,9 @@ That slice adds:
 
 ## Status
 
-- Completed: `V4-1`, `V4-2`, `V4-3`, `V4-4`, `V4-5`, `V4-6`, `V4-7`, `V4-8`
+- Completed: `V4-1`, `V4-2`, `V4-3`, `V4-4`, `V4-5`, `V4-6`, `V4-7`, `V4-8`, `V4-9`
 - In progress: none
-- Pending: `V4-9`
+- Pending: none
 
 ## Work Log
 
@@ -73,6 +73,9 @@ That slice adds:
 - Added explicit inspection helpers for the host-side lock state and app
   marker, then hardened same-process reacquisition so repeated requests reuse
   the current lease instead of contending against themselves.
+- Added a real multi-process smoke path that spawns separate Node processes
+  against the shared lock manager and verifies both serialized acquisition and
+  stale-lock takeover after a crashed holder exits without cleanup.
 
 ## Files Modified or Created
 
@@ -84,6 +87,7 @@ That slice adds:
 - `./src/fixtures/vault-lock.ts`
 - `./src/vitest.ts`
 - `./tests/fixtures/create-obsidian-test.test.ts`
+- `./tests/helpers/vault-lock-child.ts`
 - `./tests/helpers/stub-obsidian-client.ts`
 - `./tests/fixtures/vault-lock.test.ts`
 - `./v4-plan.md`
@@ -100,3 +104,6 @@ That slice adds:
 - Same-process reacquisition is intentionally reentrant. To test busy-lock
   behavior, simulate another owner through the filesystem state rather than
   reacquiring from the same process.
+- The smoke path uses separate child Node processes with
+  `--experimental-strip-types` so it can execute the TypeScript lock helper
+  directly without requiring a prior package build.
