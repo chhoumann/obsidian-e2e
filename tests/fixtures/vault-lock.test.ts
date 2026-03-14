@@ -241,8 +241,8 @@ describe("vault lock", () => {
 
     holder.release();
     const holderReleased = await holder.nextEvent("released");
-    const waiterAcquired = await waiter.nextEvent("acquired");
-    const waiterReleased = await waiter.nextEvent("released");
+    const waiterAcquired = await waiter.nextEvent("acquired", 5_000);
+    const waiterReleased = await waiter.nextEvent("released", 5_000);
 
     expect(waiterAcquired.ownerId).not.toBe(holderAcquired.ownerId);
     expect(waiterAcquired.acquiredAt).toBeGreaterThanOrEqual(holderReleased.releasedAt ?? 0);
@@ -329,6 +329,7 @@ function spawnVaultLockChild(
   const events: VaultLockChildEvent[] = [];
   const pendingResolvers = new Set<() => void>();
   const stdout = createInterface({ input: child.stdout });
+  let exitResult: { code: number | null; signal: NodeJS.Signals | null } | null = null;
   let stderr = "";
 
   stdout.on("line", (line) => {
@@ -349,7 +350,13 @@ function spawnVaultLockChild(
   const exit = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
     child.once("exit", (code, signal) => {
       stdout.close();
-      resolve({ code, signal });
+      exitResult = { code, signal };
+
+      for (const notify of pendingResolvers) {
+        notify();
+      }
+      pendingResolvers.clear();
+      resolve(exitResult);
     });
   });
 
@@ -381,6 +388,12 @@ function spawnVaultLockChild(
       if (Date.now() - startedAt >= timeoutMs) {
         throw new Error(
           `Timed out waiting for child ${type} event.\nstdout events: ${JSON.stringify(events)}\nstderr: ${stderr}`,
+        );
+      }
+
+      if (exitResult) {
+        throw new Error(
+          `Child exited before ${type} event: code=${exitResult.code} signal=${exitResult.signal}\nstdout events: ${JSON.stringify(events)}\nstderr: ${stderr}`,
         );
       }
 
