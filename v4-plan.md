@@ -23,9 +23,9 @@
   - depends_on: [`V4-2`, `V4-3`, `V4-4`]
 - [x] `V4-6` Add focused tests and user-facing docs for shared vault locking
   - depends_on: [`V4-4`, `V4-5`]
-- [ ] `V4-7` Add explicit lock diagnostics and inspection APIs
+- [x] `V4-7` Add explicit lock diagnostics and inspection APIs
   - depends_on: [`V4-6`]
-- [ ] `V4-8` Add reentrancy and ownership UX hardening
+- [x] `V4-8` Add reentrancy and ownership UX hardening
   - depends_on: [`V4-5`, `V4-7`]
 - [ ] `V4-9` Add a real multi-process integration smoke path
   - depends_on: [`V4-5`, `V4-6`]
@@ -54,9 +54,9 @@ That slice adds:
 
 ## Status
 
-- Completed: `V4-1`, `V4-2`, `V4-3`, `V4-4`, `V4-5`, `V4-6`
+- Completed: `V4-1`, `V4-2`, `V4-3`, `V4-4`, `V4-5`, `V4-6`, `V4-7`, `V4-8`
 - In progress: none
-- Pending: `V4-7`, `V4-8`, `V4-9`
+- Pending: `V4-9`
 
 ## Work Log
 
@@ -70,6 +70,9 @@ That slice adds:
   the Obsidian app for visibility.
 - Added focused tests for acquire/release, busy handling, stale takeover, and
   app-marker publishing, then documented the mode in the README.
+- Added explicit inspection helpers for the host-side lock state and app
+  marker, then hardened same-process reacquisition so repeated requests reuse
+  the current lease instead of contending against themselves.
 
 ## Files Modified or Created
 
@@ -79,6 +82,7 @@ That slice adds:
 - `./src/fixtures/create-plugin-test.ts`
 - `./src/fixtures/types.ts`
 - `./src/fixtures/vault-lock.ts`
+- `./src/vitest.ts`
 - `./tests/fixtures/create-obsidian-test.test.ts`
 - `./tests/helpers/stub-obsidian-client.ts`
 - `./tests/fixtures/vault-lock.test.ts`
@@ -93,3 +97,6 @@ That slice adds:
 - Crash recovery depends on heartbeat and stale-lock takeover. If the holder
   disappears without cleanup, the next run must wait for or take over the stale
   lease.
+- Same-process reacquisition is intentionally reentrant. To test busy-lock
+  behavior, simulate another owner through the filesystem state rather than
+  reacquiring from the same process.

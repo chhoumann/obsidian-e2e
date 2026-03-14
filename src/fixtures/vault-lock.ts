@@ -13,6 +13,7 @@ const DEFAULT_WAIT_INTERVAL_MS = 500;
 const DEFAULT_LOCK_ROOT = path.join(os.tmpdir(), "obsidian-e2e-locks");
 const LOCK_METADATA_FILE = "lock.json";
 const APP_LOCK_KEY = "__obsidianE2ELock";
+const heldLocks = new Map<string, HeldVaultRunLock>();
 
 export interface VaultRunLockMetadata {
   acquiredAt: number;
@@ -34,9 +35,24 @@ export interface VaultRunLock {
   release(): Promise<void>;
 }
 
+export interface VaultRunLockState {
+  heartbeatAgeMs: number;
+  isStale: boolean;
+  lockDir: string;
+  metadata: VaultRunLockMetadata;
+}
+
 interface AcquireVaultRunLockOptions extends SharedVaultLockOptions {
   vaultName: string;
   vaultPath: string;
+}
+
+interface HeldVaultRunLock {
+  heartbeat: NodeJS.Timeout;
+  lockDir: string;
+  metadata: VaultRunLockMetadata;
+  metadataPath: string;
+  refs: number;
 }
 
 export async function acquireVaultRunLock({
@@ -48,8 +64,15 @@ export async function acquireVaultRunLock({
   vaultName,
   vaultPath,
 }: AcquireVaultRunLockOptions): Promise<VaultRunLock> {
-  const ownerId = randomUUID();
   const lockDir = path.join(lockRoot, createVaultLockKey(vaultPath));
+  const heldLock = heldLocks.get(lockDir);
+
+  if (heldLock) {
+    heldLock.refs += 1;
+    return createVaultRunLockHandle(heldLock);
+  }
+
+  const ownerId = randomUUID();
   const metadataPath = path.join(lockDir, LOCK_METADATA_FILE);
   const metadata: VaultRunLockMetadata = {
     acquiredAt: Date.now(),
@@ -77,9 +100,13 @@ export async function acquireVaultRunLock({
         throw error;
       }
 
-      const currentLock = await readLockState(lockDir);
+      const currentLock = await inspectVaultRunLock({
+        lockRoot,
+        staleMs,
+        vaultPath,
+      });
 
-      if (currentLock && !isLockStale(currentLock, staleMs)) {
+      if (currentLock && !currentLock.isStale) {
         if (onBusy === "fail") {
           throw new Error(formatBusyLockMessage(vaultPath, currentLock));
         }
@@ -106,29 +133,54 @@ export async function acquireVaultRunLock({
   }, heartbeatMs);
   heartbeat.unref();
 
-  return {
+  const nextHeldLock: HeldVaultRunLock = {
+    heartbeat,
     lockDir,
     metadata,
-    async publishMarker(obsidian: ObsidianClient) {
-      await obsidian.dev.eval(buildSetMarkerCode(metadata));
-    },
-    async release() {
-      clearInterval(heartbeat);
-      const currentLock = await readLockState(lockDir);
-
-      if (currentLock?.ownerId !== metadata.ownerId) {
-        return;
-      }
-
-      await rm(lockDir, { force: true, recursive: true });
-    },
+    metadataPath,
+    refs: 1,
   };
+
+  heldLocks.set(lockDir, nextHeldLock);
+  return createVaultRunLockHandle(nextHeldLock);
 }
 
 export async function clearVaultRunLockMarker(obsidian: ObsidianClient): Promise<void> {
   await obsidian.dev.eval(`delete window.${APP_LOCK_KEY}; delete app.${APP_LOCK_KEY}; "cleared"`, {
     allowNonZeroExit: true,
   });
+}
+
+export async function inspectVaultRunLock({
+  lockRoot = DEFAULT_LOCK_ROOT,
+  staleMs = DEFAULT_STALE_MS,
+  vaultPath,
+}: Pick<
+  AcquireVaultRunLockOptions,
+  "lockRoot" | "staleMs" | "vaultPath"
+>): Promise<VaultRunLockState | null> {
+  const lockDir = path.join(lockRoot, createVaultLockKey(vaultPath));
+  const metadata = await readLockState(lockDir);
+
+  if (!metadata) {
+    return null;
+  }
+
+  return {
+    heartbeatAgeMs: Date.now() - metadata.heartbeatAt,
+    isStale: isLockStale(metadata, staleMs),
+    lockDir,
+    metadata,
+  };
+}
+
+export async function readVaultRunLockMarker(
+  obsidian: ObsidianClient,
+): Promise<VaultRunLockMetadata | null> {
+  return obsidian.dev.eval<VaultRunLockMetadata | null>(
+    `window.${APP_LOCK_KEY} ?? app.${APP_LOCK_KEY} ?? null`,
+    { allowNonZeroExit: true },
+  );
 }
 
 function createVaultLockKey(vaultPath: string): string {
@@ -143,6 +195,37 @@ function buildSetMarkerCode(metadata: VaultRunLockMetadata): string {
     app.${APP_LOCK_KEY} = lock;
     return lock;
   })()`;
+}
+
+function createVaultRunLockHandle(heldLock: HeldVaultRunLock): VaultRunLock {
+  return {
+    get lockDir() {
+      return heldLock.lockDir;
+    },
+    get metadata() {
+      return heldLock.metadata;
+    },
+    async publishMarker(obsidian: ObsidianClient) {
+      await obsidian.dev.eval(buildSetMarkerCode(heldLock.metadata));
+    },
+    async release() {
+      if (heldLock.refs > 1) {
+        heldLock.refs -= 1;
+        return;
+      }
+
+      heldLocks.delete(heldLock.lockDir);
+      clearInterval(heldLock.heartbeat);
+
+      const currentLock = await readLockState(heldLock.lockDir);
+
+      if (currentLock?.ownerId !== heldLock.metadata.ownerId) {
+        return;
+      }
+
+      await rm(heldLock.lockDir, { force: true, recursive: true });
+    },
+  };
 }
 
 async function readLockState(lockDir: string): Promise<VaultRunLockMetadata | null> {
@@ -170,12 +253,13 @@ async function readLockState(lockDir: string): Promise<VaultRunLockMetadata | nu
   }
 }
 
-function formatBusyLockMessage(vaultPath: string, metadata: VaultRunLockMetadata): string {
-  const ownerDetails = metadata.ownerId
-    ? `owner=${metadata.ownerId} pid=${metadata.pid} cwd=${metadata.cwd || "<unknown>"}`
+function formatBusyLockMessage(vaultPath: string, state: VaultRunLockState): string {
+  const ownerDetails = state.metadata.ownerId
+    ? `owner=${state.metadata.ownerId} pid=${state.metadata.pid} cwd=${state.metadata.cwd || "<unknown>"}`
     : "owner=<unknown>";
+  const ageDetails = `heartbeatAgeMs=${state.heartbeatAgeMs} stale=${state.isStale}`;
 
-  return `vault ${vaultPath} is locked by ${ownerDetails}`;
+  return `vault ${vaultPath} is locked by ${ownerDetails} ${ageDetails}`;
 }
 
 function isAlreadyExistsError(error: unknown): boolean {

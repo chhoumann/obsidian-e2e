@@ -96,6 +96,28 @@ marker into the Obsidian process. That marker is not authoritative. The
 filesystem lock is the source of truth, and the app marker is only there to
 help humans understand which run currently owns the vault.
 
+For lock diagnostics, `obsidian-e2e/vitest` also exports:
+
+```ts
+import { inspectVaultRunLock, readVaultRunLockMarker } from "obsidian-e2e/vitest";
+
+const state = await inspectVaultRunLock({
+  vaultPath: "/absolute/path/to/dev-vault",
+});
+
+const marker = await readVaultRunLockMarker(obsidian);
+```
+
+`inspectVaultRunLock()` reads the authoritative host-side lock state and
+returns the current metadata, lock directory, heartbeat age, and stale status.
+`readVaultRunLockMarker()` reads the best-effort marker from the running
+Obsidian app.
+
+Within one worker/process, reacquiring the same shared-vault lock is reentrant:
+the existing lease is reused instead of contending against itself. Across
+different processes or worktrees, contention still serializes access through
+the host-side lock.
+
 This mode prevents collisions between concurrent runs that share one live
 vault, but it does not create true parallel execution inside that vault. It
 serializes access. If your goal is real parallelism, use separate vaults rather
