@@ -1,0 +1,47 @@
+{
+  "name": "obsidian-e2e-vp-tmp",
+  "type": "module",
+  "version": "0.0.0",
+  "description": "A starter for creating a TypeScript package.",
+  "author": "Author Name <author.name@mail.com>",
+  "license": "MIT",
+  "homepage": "https://github.com/author/library#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/author/library.git"
+  },
+  "bugs": {
+    "url": "https://github.com/author/library/issues"
+  },
+  "exports": {
+    ".": "./dist/index.mjs",
+    "./package.json": "./package.json"
+  },
+  "types": "./dist/index.d.mts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "vp pack",
+    "dev": "vp pack --watch",
+    "test": "vp test",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "pnpm run build",
+    "prepare": "vp config"
+  },
+  "devDependencies": {
+    "@types/node": "^25.3.5",
+    "@typescript/native-preview": "7.0.0-dev.20260309.1",
+    "bumpp": "^10.4.1",
+    "typescript": "^5.9.3",
+    "vitest": "npm:@voidzero-dev/vite-plus-test@latest",
+    "vite-plus": "latest"
+  },
+  "pnpm": {
+    "overrides": {
+      "vite": "npm:@voidzero-dev/vite-plus-core@latest",
+      "vitest": "npm:@voidzero-dev/vite-plus-test@latest"
+    }
+  },
+  "packageManager": "pnpm@10.32.1"
+}
