@@ -1,6 +1,9 @@
 import type { TestContext } from "vite-plus/test";
 
-import { captureFailureArtifacts } from "../artifacts/failure-artifacts";
+import {
+  captureFailureArtifacts,
+  capturePluginFailureArtifacts,
+} from "../artifacts/failure-artifacts";
 import type { ObsidianClient, PluginHandle } from "../core/types";
 import type { CreateObsidianTestOptions } from "./types";
 
@@ -19,5 +22,19 @@ export function registerFailureArtifacts(
       ...options,
       plugin,
     });
+  });
+}
+
+export function registerPluginFailureArtifacts(
+  context: Pick<TestContext, "onTestFailed" | "task">,
+  plugin: PluginHandle,
+  options: Pick<CreateObsidianTestOptions, "artifactsDir" | "captureOnFailure">,
+): void {
+  if (!options.captureOnFailure) {
+    return;
+  }
+
+  context.onTestFailed(async () => {
+    await capturePluginFailureArtifacts(context.task, plugin, options);
   });
 }

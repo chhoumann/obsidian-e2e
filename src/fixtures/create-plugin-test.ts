@@ -6,7 +6,7 @@ import type { ObsidianClient, VaultApi } from "../core/types";
 import { createVaultApi } from "../vault/vault";
 import { resolveFilesystemPath } from "../vault/paths";
 import { createBaseFixtures, type BaseFixtureState } from "./base-fixtures";
-import { registerFailureArtifacts } from "./failure-artifacts";
+import { registerPluginFailureArtifacts } from "./failure-artifacts";
 import type {
   CreatePluginTestOptions,
   PluginFixtures,
@@ -45,7 +45,7 @@ export function createPluginTest(options: CreatePluginTestOptions): PluginTest {
         await plugin.data().write(options.seedPluginData);
       }
 
-      registerFailureArtifacts({ onTestFailed, task }, obsidian, options, plugin);
+      registerPluginFailureArtifacts({ onTestFailed, task }, plugin, options);
 
       try {
         await use(plugin);

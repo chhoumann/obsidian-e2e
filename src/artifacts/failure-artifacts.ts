@@ -129,6 +129,26 @@ export async function captureFailureArtifacts(
   return artifactDirectory;
 }
 
+export async function capturePluginFailureArtifacts(
+  task: FailureArtifactTask,
+  plugin: PluginHandle,
+  options: FailureArtifactRegistrationOptions,
+): Promise<string | undefined> {
+  const config = getFailureArtifactConfig(options);
+
+  if (!config.enabled) {
+    return undefined;
+  }
+
+  const artifactDirectory = getFailureArtifactDirectory(config.artifactsDir, task);
+  await mkdir(artifactDirectory, { recursive: true });
+  await captureJsonArtifact(artifactDirectory, `${plugin.id}-data.json`, true, () =>
+    plugin.data().read(),
+  );
+
+  return artifactDirectory;
+}
+
 async function captureJsonArtifact(
   artifactDirectory: string,
   filename: string,

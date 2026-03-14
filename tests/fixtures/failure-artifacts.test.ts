@@ -11,7 +11,10 @@ import {
   getFailureArtifactDirectory,
 } from "../../src/artifacts/failure-artifacts";
 import { createPluginHandle } from "../../src/core/plugin";
-import { registerFailureArtifacts } from "../../src/fixtures/failure-artifacts";
+import {
+  registerFailureArtifacts,
+  registerPluginFailureArtifacts,
+} from "../../src/fixtures/failure-artifacts";
 import { createStubObsidianClient } from "../helpers/stub-obsidian-client";
 
 const tempDirectories: string[] = [];
@@ -137,6 +140,98 @@ describe("failure artifacts", () => {
         "utf8",
       ),
     ).resolves.toContain('"enabled": true');
+  });
+
+  test("captures plugin data without duplicating core artifacts", async () => {
+    const artifactsDir = await createTempDir("obsidian-e2e-plugin-only-artifacts-");
+    const vaultRoot = await createTempDir("obsidian-e2e-plugin-only-vault-");
+    const pluginDataPath = path.join(vaultRoot, ".obsidian", "plugins", "quickadd", "data.json");
+    await fs.mkdir(path.dirname(pluginDataPath), { recursive: true });
+    await fs.writeFile(pluginDataPath, `${JSON.stringify({ enabled: true }, null, 2)}\n`, "utf8");
+    const evalCalls: string[] = [];
+    let screenshotCalls = 0;
+
+    const client = createStubObsidianClient({
+      activeFile: "Inbox/Today.md",
+      domResult: "<div>Workspace</div>",
+      editorText: "# Today",
+      onEval: async (code) => {
+        evalCalls.push(code);
+
+        if (code === "app.workspace.getActiveFile()?.path ?? null") {
+          return "Inbox/Today.md";
+        }
+
+        if (code === "app.workspace.activeLeaf?.view?.editor?.getValue?.() ?? null") {
+          return "# Today";
+        }
+
+        throw new Error(`Unhandled dev.eval code: ${code}`);
+      },
+      onScreenshot: async (targetPath) => {
+        screenshotCalls += 1;
+        await fs.writeFile(targetPath, "png", "utf8");
+        return targetPath;
+      },
+      pluginFactory: createPluginHandle,
+      readFileForRestore: (filePath) => fs.readFile(filePath, "utf8"),
+      vaultRoot,
+    });
+    const plugin = client.plugin("quickadd");
+
+    let coreFailureHook: (() => Promise<void>) | undefined;
+    let pluginFailureHook: (() => Promise<void>) | undefined;
+    const failureContext = {
+      task: {
+        id: "file_test_plugin1234",
+        name: "captures plugin fixture data once",
+      },
+    };
+
+    registerFailureArtifacts(
+      {
+        onTestFailed(fn: OnTestFailedHandler) {
+          coreFailureHook = () => Promise.resolve(fn(failureContext as never));
+        },
+        task: failureContext.task,
+      } as never,
+      client,
+      {
+        artifactsDir,
+        captureOnFailure: true,
+      },
+    );
+
+    registerPluginFailureArtifacts(
+      {
+        onTestFailed(fn: OnTestFailedHandler) {
+          pluginFailureHook = () => Promise.resolve(fn(failureContext as never));
+        },
+        task: failureContext.task,
+      } as never,
+      plugin,
+      {
+        artifactsDir,
+        captureOnFailure: true,
+      },
+    );
+
+    await coreFailureHook?.();
+    await pluginFailureHook?.();
+
+    const artifactRoot = path.join(artifactsDir, "captures-plugin-fixture-data-once-plugin1234");
+
+    await expect(
+      fs.readFile(path.join(artifactRoot, "quickadd-data.json"), "utf8"),
+    ).resolves.toContain('"enabled": true');
+    await expect(
+      fs.readFile(path.join(artifactRoot, "active-file.json"), "utf8"),
+    ).resolves.toContain("Inbox/Today.md");
+    await expect(fs.readFile(path.join(artifactRoot, "dom.txt"), "utf8")).resolves.toContain(
+      "Workspace",
+    );
+    expect(evalCalls).toHaveLength(2);
+    expect(screenshotCalls).toBe(1);
   });
 });
 
