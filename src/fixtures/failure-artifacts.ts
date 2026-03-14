@@ -10,6 +10,10 @@ export function registerFailureArtifacts(
   options: Pick<CreateObsidianTestOptions, "artifactsDir" | "captureOnFailure">,
   plugin?: PluginHandle,
 ): void {
+  if (!options.captureOnFailure) {
+    return;
+  }
+
   context.onTestFailed(async () => {
     await captureFailureArtifacts(context.task, obsidian, {
       ...options,

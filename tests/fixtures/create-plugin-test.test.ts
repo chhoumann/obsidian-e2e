@@ -5,7 +5,8 @@ import path from "node:path";
 import { afterAll, beforeAll, expect } from "vite-plus/test";
 
 import { createPluginTest } from "../../src/vitest";
-import type { CommandTransport, ExecResult } from "../../src/core/types";
+import { createExecResult } from "../helpers/create-exec-result";
+import type { CommandTransport } from "../../src/core/types";
 
 let pluginDataPath = "";
 let seededNotePath = "";
@@ -68,7 +69,7 @@ function createTransport(): CommandTransport {
     transportCalls.push([...request.argv]);
 
     if (request.argv[0] === "--help") {
-      return createResult(request.bin, request.argv, "usage\n");
+      return createExecResult(request.bin, request.argv, "usage\n");
     }
 
     const [, command, ...rest] = request.argv;
@@ -82,37 +83,27 @@ function createTransport(): CommandTransport {
     );
 
     if (command === "vault" && args.info === "path") {
-      return createResult(request.bin, request.argv, `${vaultRoot}\n`);
+      return createExecResult(request.bin, request.argv, `${vaultRoot}\n`);
     }
 
     if (command === "commands") {
-      return createResult(request.bin, request.argv, "plugin:reload\n");
+      return createExecResult(request.bin, request.argv, "plugin:reload\n");
     }
 
     if (command === "plugin") {
-      return createResult(request.bin, request.argv, `enabled\t${enabled}\n`);
+      return createExecResult(request.bin, request.argv, `enabled\t${enabled}\n`);
     }
 
     if (command === "plugin:enable") {
       enabled = true;
-      return createResult(request.bin, request.argv, "");
+      return createExecResult(request.bin, request.argv, "");
     }
 
     if (command === "plugin:disable") {
       enabled = false;
-      return createResult(request.bin, request.argv, "");
+      return createExecResult(request.bin, request.argv, "");
     }
 
     throw new Error(`Unhandled transport request: ${request.argv.join(" ")}`);
-  };
-}
-
-function createResult(command: string, argv: string[], stdout: string): ExecResult {
-  return {
-    argv,
-    command,
-    exitCode: 0,
-    stderr: "",
-    stdout,
   };
 }

@@ -2,7 +2,7 @@ import { test as base } from "vite-plus/test";
 import type { TestContext } from "vite-plus/test";
 
 import { getClientInternals } from "../core/internals";
-import type { ObsidianClient } from "../core/types";
+import type { ObsidianClient, VaultApi } from "../core/types";
 import { createVaultApi } from "../vault/vault";
 import { resolveFilesystemPath } from "../vault/paths";
 import { createBaseFixtures, type BaseFixtureState } from "./base-fixtures";
@@ -71,7 +71,7 @@ async function applyVaultSeed(obsidian: ObsidianClient, seedVault: VaultSeed): P
 }
 
 async function writeSeedValue(
-  vault: ReturnType<typeof createVaultApi>,
+  vault: VaultApi,
   targetPath: string,
   value: VaultSeedEntry,
 ): Promise<void> {

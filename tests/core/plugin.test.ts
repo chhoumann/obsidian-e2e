@@ -3,8 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { createObsidianClient } from "../../src/core/client";
-import { waitForValue } from "../../src/core/wait";
+import { sleep, waitForValue } from "../../src/core/wait";
 import { createStubObsidianClient } from "../helpers/stub-obsidian-client";
+import { createExecResult } from "../helpers/create-exec-result";
 import type { CommandTransport } from "../../src/core/types";
 
 const tempDirectories: string[] = [];
@@ -57,7 +58,7 @@ describe("plugin readiness helpers", () => {
 
     const transport = vi.fn<CommandTransport>().mockImplementation(async (request) => {
       if (request.argv[0] === "--help") {
-        return createResult(request.bin, request.argv, "usage\n");
+        return createExecResult(request.bin, request.argv, "usage\n");
       }
 
       const [, command, ...rest] = request.argv;
@@ -71,22 +72,22 @@ describe("plugin readiness helpers", () => {
       );
 
       if (command === "vault" && args.info === "path") {
-        return createResult(request.bin, request.argv, "/tmp/vault\n");
+        return createExecResult(request.bin, request.argv, "/tmp/vault\n");
       }
 
       if (command === "eval") {
         readyAttempts += 1;
-        return createResult(request.bin, request.argv, `=> ${readyAttempts > 1}\n`);
+        return createExecResult(request.bin, request.argv, `=> ${readyAttempts > 1}\n`);
       }
 
       if (command === "plugin:reload") {
-        return createResult(request.bin, request.argv, "");
+        return createExecResult(request.bin, request.argv, "");
       }
 
       if (command === "commands") {
         commandAttempts += 1;
 
-        return createResult(
+        return createExecResult(
           request.bin,
           request.argv,
           commandAttempts > 1 ? "quickadd:list\tList choices\n" : "",
@@ -133,7 +134,7 @@ describe("plugin readiness helpers", () => {
     setTimeout(async () => {
       await fs.mkdir(path.dirname(pluginDataPath), { recursive: true });
       await fs.writeFile(pluginDataPath, '{"count":', "utf8");
-      await new Promise((resolve) => setTimeout(resolve, 5));
+      await sleep(5);
       await fs.writeFile(pluginDataPath, '{\n  "count": 2\n}\n', "utf8");
     }, 5);
 
@@ -157,14 +158,4 @@ function createFakeClient(vaultRoot: string) {
     readFileForRestore: (filePath) => fs.readFile(filePath, "utf8"),
     vaultRoot,
   });
-}
-
-function createResult(command: string, argv: string[], stdout: string) {
-  return {
-    argv,
-    command,
-    exitCode: 0,
-    stderr: "",
-    stdout,
-  };
 }

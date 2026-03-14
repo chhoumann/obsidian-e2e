@@ -9,7 +9,7 @@ export interface ExecOptions {
 
 export type VaultContentPredicate = (content: string) => boolean | Promise<boolean>;
 
-export interface VaultWaitForContentOptions extends WaitForOptions {}
+export type VaultWaitForContentOptions = WaitForOptions;
 
 export interface VaultWriteOptions {
   waitForContent?: boolean | VaultContentPredicate;
@@ -18,7 +18,7 @@ export interface VaultWriteOptions {
 
 export type PluginDataPredicate<T = unknown> = (data: T) => boolean | Promise<boolean>;
 
-export interface PluginWaitForDataOptions extends WaitForOptions {}
+export type PluginWaitForDataOptions = WaitForOptions;
 
 export interface PluginWaitUntilReadyOptions extends WaitForOptions {
   commandId?: string;

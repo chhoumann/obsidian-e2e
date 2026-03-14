@@ -5,7 +5,8 @@ import { setTimeout as delay } from "node:timers/promises";
 import { expect, test } from "vite-plus/test";
 
 import { createObsidianTest } from "../../src/vitest";
-import type { CommandTransport, ExecResult } from "../../src/core/types";
+import { createExecResult } from "./create-exec-result";
+import type { CommandTransport } from "../../src/core/types";
 
 const isChildRun = process.env.OBSIDIAN_E2E_FIXTURE_CHILD === "1";
 
@@ -64,7 +65,7 @@ function createTransport(): CommandTransport {
 
   return async (request) => {
     if (request.argv[0] === "--help") {
-      return createResult(request.bin, request.argv, "usage\n");
+      return createExecResult(request.bin, request.argv, "usage\n");
     }
 
     const [, command, ...rest] = request.argv;
@@ -85,34 +86,24 @@ function createTransport(): CommandTransport {
           startedAt: Date.now(),
         });
       }
-      return createResult(request.bin, request.argv, `${getEnv("OBSIDIAN_E2E_VAULT_ROOT")}\n`);
+      return createExecResult(request.bin, request.argv, `${getEnv("OBSIDIAN_E2E_VAULT_ROOT")}\n`);
     }
 
     if (command === "vault" && args.info === "name") {
-      return createResult(request.bin, request.argv, "dev\n");
+      return createExecResult(request.bin, request.argv, "dev\n");
     }
 
     if (command === "commands") {
-      return createResult(request.bin, request.argv, "plugin:reload\n");
+      return createExecResult(request.bin, request.argv, "plugin:reload\n");
     }
 
     if (command === "eval") {
       const code = String(args.code ?? "");
       await appendFile(getEnv("OBSIDIAN_E2E_EVAL_LOG"), `${code}\n`, "utf8");
-      return createResult(request.bin, request.argv, "{}\n");
+      return createExecResult(request.bin, request.argv, "{}\n");
     }
 
     throw new Error(`Unhandled transport request: ${request.argv.join(" ")}`);
-  };
-}
-
-function createResult(command: string, argv: string[], stdout: string): ExecResult {
-  return {
-    argv,
-    command,
-    exitCode: 0,
-    stderr: "",
-    stdout,
   };
 }
 

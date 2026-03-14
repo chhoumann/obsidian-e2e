@@ -2,8 +2,6 @@ export { createObsidianClient } from "./core/client";
 export {
   captureFailureArtifacts,
   DEFAULT_FAILURE_ARTIFACTS_DIR,
-  getFailureArtifactConfig,
-  getFailureArtifactDirectory,
 } from "./artifacts/failure-artifacts";
 export {
   acquireVaultRunLock,

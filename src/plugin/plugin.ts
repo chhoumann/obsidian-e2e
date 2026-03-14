@@ -107,18 +107,18 @@ export function createPluginHandle(client: ObsidianClient, id: string): PluginHa
           }
 
           if (options.commandId) {
-            return (await client.command(options.commandId).exists()) ? true : false;
+            return await client.command(options.commandId).exists();
           }
 
           return true;
         },
         {
+          ...options,
           message:
             options.message ??
             (options.commandId
               ? `plugin "${id}" to be ready with command "${options.commandId}"`
               : `plugin "${id}" to be ready`),
-          ...options,
         },
       );
     },

@@ -75,10 +75,12 @@ export function createVaultApi(options: CreateVaultApiOptions): VaultApi {
       return readFile(resolvedPath, "utf8");
     },
     async waitForContent(targetPath, predicate, waitOptions: VaultWaitForContentOptions = {}) {
+      const resolvedPath = await resolveFilesystemPath(options.obsidian, scopeRoot, targetPath);
+
       return options.obsidian.waitFor(
         async () => {
           try {
-            const content = await this.read(targetPath);
+            const content = await readFile(resolvedPath, "utf8");
             return (await predicate(content)) ? content : false;
           } catch {
             return false;
@@ -91,16 +93,40 @@ export function createVaultApi(options: CreateVaultApiOptions): VaultApi {
       );
     },
     async waitForExists(targetPath, waitOptions) {
-      await options.obsidian.waitFor(async () => ((await this.exists(targetPath)) ? true : false), {
-        message: `vault path "${resolveVaultPath(scopeRoot, targetPath)}" to exist`,
-        ...waitOptions,
-      });
+      const resolvedPath = await resolveFilesystemPath(options.obsidian, scopeRoot, targetPath);
+
+      await options.obsidian.waitFor(
+        async () => {
+          try {
+            await access(resolvedPath);
+            return true;
+          } catch {
+            return false;
+          }
+        },
+        {
+          message: `vault path "${resolveVaultPath(scopeRoot, targetPath)}" to exist`,
+          ...waitOptions,
+        },
+      );
     },
     async waitForMissing(targetPath, waitOptions) {
-      await options.obsidian.waitFor(async () => ((await this.exists(targetPath)) ? false : true), {
-        message: `vault path "${resolveVaultPath(scopeRoot, targetPath)}" to be removed`,
-        ...waitOptions,
-      });
+      const resolvedPath = await resolveFilesystemPath(options.obsidian, scopeRoot, targetPath);
+
+      await options.obsidian.waitFor(
+        async () => {
+          try {
+            await access(resolvedPath);
+            return false;
+          } catch {
+            return true;
+          }
+        },
+        {
+          message: `vault path "${resolveVaultPath(scopeRoot, targetPath)}" to be removed`,
+          ...waitOptions,
+        },
+      );
     },
     async write(targetPath, content, writeOptions: VaultWriteOptions = {}) {
       const resolvedPath = await resolveFilesystemPath(options.obsidian, scopeRoot, targetPath);
