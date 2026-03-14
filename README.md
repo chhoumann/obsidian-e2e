@@ -127,6 +127,7 @@ export const test = createPluginTest({
   enabled/disabled state afterward
 - seeds vault files before each test and restores the original files afterward
 - seeds `data.json` through the normal plugin snapshot/restore path
+- supports the same opt-in failure artifact capture as `createObsidianTest()`
 
 Example:
 
@@ -143,6 +144,63 @@ test("runs against a seeded plugin fixture", async ({ plugin, vault }) => {
   await plugin.reload();
 });
 ```
+
+## Failure Artifacts
+
+Both fixture families support opt-in artifact capture:
+
+- `createObsidianTest({ artifactsDir, captureOnFailure })`
+- `createPluginTest({ artifactsDir, captureOnFailure, ... })`
+
+Example:
+
+```ts
+import { createObsidianTest, createPluginTest } from "obsidian-e2e/vitest";
+
+export const test = createObsidianTest({
+  vault: "dev",
+  captureOnFailure: true,
+});
+
+export const pluginTest = createPluginTest({
+  vault: "dev",
+  pluginId: "quickadd",
+  artifactsDir: ".artifacts",
+  captureOnFailure: {
+    screenshot: false,
+  },
+});
+```
+
+When `captureOnFailure` is enabled, failed tests write artifacts under
+`.obsidian-e2e-artifacts` by default, or under `artifactsDir` if you set one.
+Each failed test gets its own directory named from the test name plus a stable
+task-id suffix, for example:
+
+```txt
+.obsidian-e2e-artifacts/
+  writes-useful-artifacts-abcdef12/
+```
+
+`createObsidianTest()` captures:
+
+- `active-file.json`
+- `dom.txt`
+- `editor.json`
+- `tabs.json`
+- `workspace.json`
+- `screenshot.png` when screenshot capture succeeds
+
+`createPluginTest()` adds:
+
+- `<pluginId>-data.json`
+
+Artifact collection is best-effort. If a specific capture fails, the test still
+fails for its original reason and the framework writes a neighboring
+`*.error.txt` file instead. Screenshot capture is the most environment-sensitive
+part of the set: desktop permissions, display availability, or Obsidian state
+can prevent `screenshot.png` from being produced, in which case you should
+expect `screenshot.error.txt` instead.
 
 ## Matchers
 

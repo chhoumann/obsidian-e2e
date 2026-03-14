@@ -12,7 +12,9 @@ import type {
 interface CreateStubObsidianClientOptions {
   activeFile?: string | null;
   commands?: string[];
+  domResult?: DevDomResult;
   editorText?: string | null;
+  onScreenshot?: (path: string) => Promise<string> | string;
   pluginFactory?: (client: ObsidianClient, id: string) => PluginHandle;
   readFileForRestore?: (filePath: string) => Promise<string>;
   tabs?: WorkspaceTab[];
@@ -23,6 +25,7 @@ interface CreateStubObsidianClientOptions {
 export function createStubObsidianClient(options: CreateStubObsidianClientOptions): ObsidianClient {
   const activeFile = options.activeFile ?? null;
   const commandSet = new Set(options.commands ?? []);
+  const domResult = options.domResult ?? [];
   const editorText = options.editorText ?? null;
   const tabs = options.tabs ?? [];
   const workspace = options.workspace ?? [];
@@ -51,7 +54,7 @@ export function createStubObsidianClient(options: CreateStubObsidianClientOption
     },
     dev: {
       async dom() {
-        return [] as DevDomResult;
+        return domResult;
       },
       async eval(code: string) {
         if (code === "app.workspace.getActiveFile()?.path ?? null") {
@@ -65,6 +68,10 @@ export function createStubObsidianClient(options: CreateStubObsidianClientOption
         throw new Error(`Unhandled dev.eval code: ${code}`);
       },
       async screenshot(path: string) {
+        if (options.onScreenshot) {
+          return options.onScreenshot(path);
+        }
+
         return path;
       },
     },

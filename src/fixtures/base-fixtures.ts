@@ -1,8 +1,11 @@
+import type { TestContext } from "vite-plus/test";
+
 import { createObsidianClient } from "../core/client";
 import { getClientInternals } from "../core/internals";
 import type { ObsidianClient, VaultApi } from "../core/types";
 import { createSandboxApi } from "../vault/sandbox";
 import { createVaultApi } from "../vault/vault";
+import { registerFailureArtifacts } from "./failure-artifacts";
 import type { CreateObsidianTestOptions } from "./types";
 
 export const DEFAULT_SANDBOX_ROOT = "__obsidian_e2e__";
@@ -20,10 +23,14 @@ export function createBaseFixtures(
 
   return {
     // oxlint-disable-next-line no-empty-pattern
-    obsidian: async ({}, use: (obsidian: ObsidianClient) => Promise<void>) => {
+    obsidian: async (
+      { onTestFailed, task }: Pick<TestContext, "onTestFailed" | "task">,
+      use: (obsidian: ObsidianClient) => Promise<void>,
+    ) => {
       const obsidian = createObsidianClient(options);
 
       await obsidian.verify();
+      registerFailureArtifacts({ onTestFailed, task }, obsidian, options);
 
       try {
         await use(obsidian);

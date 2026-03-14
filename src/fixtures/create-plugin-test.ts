@@ -2,11 +2,13 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import { test as base } from "vite-plus/test";
+import type { TestContext } from "vite-plus/test";
 
 import { getClientInternals } from "../core/internals";
 import type { ObsidianClient } from "../core/types";
 import { createVaultApi } from "../vault/vault";
 import { createBaseFixtures } from "./base-fixtures";
+import { registerPluginFailureArtifacts } from "./failure-artifacts";
 import type {
   CreatePluginTestOptions,
   PluginFixtures,
@@ -26,7 +28,14 @@ export function createPluginTest(options: CreatePluginTestOptions): PluginTest {
         return createVaultApi({ obsidian });
       },
     }),
-    plugin: async ({ obsidian }, use) => {
+    plugin: async (
+      {
+        obsidian,
+        onTestFailed,
+        task,
+      }: Pick<PluginFixtures & TestContext, "obsidian" | "onTestFailed" | "task">,
+      use,
+    ) => {
       const plugin = obsidian.plugin(options.pluginId);
       const wasEnabled = await plugin.isEnabled();
 
@@ -37,6 +46,8 @@ export function createPluginTest(options: CreatePluginTestOptions): PluginTest {
       if (options.seedPluginData !== undefined) {
         await plugin.data().write(options.seedPluginData);
       }
+
+      registerPluginFailureArtifacts({ onTestFailed, task }, plugin, options);
 
       try {
         await use(plugin);
