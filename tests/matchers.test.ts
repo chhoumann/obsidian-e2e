@@ -6,7 +6,14 @@ import { afterEach, describe, expect, test } from "vite-plus/test";
 
 import "../src/matchers";
 import { createPluginHandle } from "../src/core/plugin";
-import type { ObsidianClient, WorkspaceNode, WorkspaceTab } from "../src/core/types";
+import type {
+  MetadataFileCache,
+  NoteFrontmatter,
+  ObsidianClient,
+  WorkspaceNode,
+  WorkspaceTab,
+} from "../src/core/types";
+import { createSandboxApi } from "../src/vault/sandbox";
 import { createVaultApi } from "../src/vault/vault";
 import { createStubObsidianClient } from "./helpers/stub-obsidian-client";
 
@@ -78,6 +85,36 @@ describe("obsidian-e2e matchers", () => {
 
     await expect(plugin).toHavePluginData({ enabled: true });
   });
+
+  test("asserts note shape and metadata-backed frontmatter", async () => {
+    const vaultRoot = await createVaultRoot();
+    const metadataByPath: Record<string, { frontmatter: { tags: string[] } } | null> = {};
+    const obsidian = createStubClient(vaultRoot, {
+      metadataByPath,
+    });
+    const sandbox = await createSandboxApi({
+      obsidian,
+      sandboxRoot: "__obsidian_e2e__",
+      testName: "Matchers",
+    });
+
+    await sandbox.write("note.md", "---\ntitle: Daily\n---\nBody\n");
+    metadataByPath[sandbox.path("note.md")] = {
+      frontmatter: {
+        tags: ["daily"],
+      },
+    };
+
+    await expect(sandbox).toHaveNote("note.md", {
+      bodyIncludes: "Body",
+      frontmatter: {
+        title: "Daily",
+      },
+    });
+    await expect(sandbox).toHaveFrontmatter("note.md", {
+      tags: ["daily"],
+    });
+  });
 });
 
 async function createVaultRoot(): Promise<string> {
@@ -92,6 +129,7 @@ function createStubClient(
     activeFile?: string | null;
     commands?: string[];
     editorText?: string | null;
+    metadataByPath?: Record<string, MetadataFileCache<NoteFrontmatter> | null>;
     tabs?: WorkspaceTab[];
     workspace?: WorkspaceNode[];
   } = {},
@@ -100,6 +138,7 @@ function createStubClient(
     activeFile: overrides.activeFile,
     commands: overrides.commands,
     editorText: overrides.editorText,
+    metadataByPath: overrides.metadataByPath,
     pluginFactory: createPluginHandle,
     tabs: overrides.tabs,
     vaultRoot,

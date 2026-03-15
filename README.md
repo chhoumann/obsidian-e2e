@@ -207,7 +207,13 @@ import { test } from "./setup";
 test("reloads a plugin after patching its data file", async ({ obsidian, vault, sandbox }) => {
   const plugin = obsidian.plugin("my-plugin");
 
-  await sandbox.write("tpl.md", "template body");
+  await sandbox.writeNote({
+    path: "tpl.md",
+    frontmatter: {
+      tags: ["template"],
+    },
+    body: "template body",
+  });
   await vault.write("notes/source.md", "existing");
 
   await plugin.data<{ enabled: boolean }>().patch((draft) => {
@@ -231,9 +237,69 @@ Fixture summary:
 - `sandbox`
   - a per-test disposable directory under `sandboxRoot`; automatically cleaned
     up after each test
+  - exposes note helpers such as `writeNote()`, `readNote()`, `frontmatter()`,
+    `waitForFrontmatter()`, and `waitForMetadata()`
 
 Plugin data mutations are snapshotted on first write and restored automatically
 after each test. Sandbox files are also cleaned up automatically.
+
+## Note Helpers And Test Context
+
+Use `sandbox.writeNote()` when the test cares about note structure rather than
+raw YAML formatting:
+
+```ts
+await sandbox.writeNote({
+  path: "Inbox/Today.md",
+  frontmatter: {
+    mood: "focused",
+    tags: ["daily"],
+  },
+  body: "# Today\n",
+});
+
+await expect(sandbox.readNote("Inbox/Today.md")).resolves.toMatchObject({
+  body: "# Today\n",
+  frontmatter: {
+    mood: "focused",
+    tags: ["daily"],
+  },
+});
+
+await sandbox.waitForFrontmatter("Inbox/Today.md", (frontmatter) =>
+  frontmatter.tags.includes("daily"),
+);
+```
+
+`readNote()` is file-derived. `sandbox.frontmatter()` and
+`sandbox.waitForMetadata()` are Obsidian metadata-cache reads, so tests can
+distinguish raw file content from “Obsidian has indexed this note”.
+
+Outside Vitest fixtures, use the public lifecycle wrapper:
+
+```ts
+import { withVaultSandbox } from "obsidian-e2e";
+
+await withVaultSandbox(
+  {
+    testName: "quickadd smoke",
+    vault: "dev",
+  },
+  async (context) => {
+    const plugin = await context.plugin("quickadd", {
+      filter: "community",
+      seedData: { enabled: true },
+    });
+
+    await context.sandbox.writeNote({
+      path: "fixtures/template.md",
+      body: "Hello from template",
+    });
+
+    await plugin.reload();
+  },
+);
+```
 
 ## Plugin Test Helper
 
@@ -250,7 +316,14 @@ export const test = createPluginTest({
   pluginFilter: "community",
   seedPluginData: { enabled: true },
   seedVault: {
-    "fixtures/template.md": "template body",
+    "fixtures/template.md": {
+      note: {
+        body: "template body",
+        frontmatter: {
+          tags: ["template"],
+        },
+      },
+    },
     "fixtures/state.json": { json: { ready: true } },
   },
 });
@@ -262,6 +335,7 @@ export const test = createPluginTest({
 - enables the target plugin for the test when needed and restores the prior
   enabled/disabled state afterward
 - seeds vault files before each test and restores the original files afterward
+  - `seedVault` accepts raw strings, `{ json }`, and `{ note }` descriptors
 - seeds `data.json` through the normal plugin snapshot/restore path
 - supports the same opt-in failure artifact capture as `createObsidianTest()`
 
@@ -321,8 +395,13 @@ task-id suffix, for example:
 `createObsidianTest()` captures:
 
 - `active-file.json`
+- `active-note.md`
+- `active-note-frontmatter.json`
+- `console-messages.json`
 - `dom.txt`
 - `editor.json`
+- `notices.json`
+- `runtime-errors.json`
 - `tabs.json`
 - `workspace.json`
 - `screenshot.png` when screenshot capture succeeds
@@ -395,7 +474,9 @@ Import `obsidian-e2e/matchers` once in your test setup to register:
 - `toHaveEditorTextContaining(needle)`
 - `toHaveFile(path)`
 - `toHaveFileContaining(path, needle)`
+- `toHaveFrontmatter(path, expected)`
 - `toHaveJsonFile(path)`
+- `toHaveNote(path, { frontmatter?, body?, bodyIncludes? })`
 - `toHaveOpenTab(title, viewType?)`
 - `toHavePluginData(expected)`
 - `toHaveWorkspaceNode(label)`
@@ -407,9 +488,23 @@ import { expect } from "vite-plus/test";
 import { test } from "./setup";
 
 test("writes valid JSON into the sandbox", async ({ sandbox }) => {
-  await sandbox.json("config.json").write({ enabled: true });
+  await sandbox.writeNote({
+    path: "Today.md",
+    frontmatter: {
+      mood: "focused",
+    },
+    body: "# Today\n",
+  });
 
-  await expect(sandbox).toHaveJsonFile("config.json");
+  await expect(sandbox).toHaveNote("Today.md", {
+    bodyIncludes: "Today",
+    frontmatter: {
+      mood: "focused",
+    },
+  });
+  await expect(sandbox).toHaveFrontmatter("Today.md", {
+    mood: "focused",
+  });
 });
 
 test("asserts active Obsidian state", async ({ obsidian, plugin }) => {
@@ -427,7 +522,7 @@ test("asserts active Obsidian state", async ({ obsidian, plugin }) => {
 If you need to work below the fixture layer:
 
 ```ts
-import { createObsidianClient, createVaultApi } from "obsidian-e2e";
+import { createObsidianClient, createVaultApi, parseNoteDocument } from "obsidian-e2e";
 
 const obsidian = createObsidianClient({
   vault: "dev",
@@ -440,12 +535,14 @@ const vault = createVaultApi({ obsidian });
 
 await obsidian.verify();
 await vault.write("Inbox/Today.md", "# Today\n", { waitForContent: true });
+await expect(await obsidian.metadata.frontmatter("Inbox/Today.md")).toBeNull();
 await obsidian.plugin("my-plugin").reload({
   waitUntilReady: true,
   readyOptions: {
     commandId: "my-plugin:refresh",
   },
 });
+parseNoteDocument(await vault.read("Inbox/Today.md"));
 ```
 
 ## App And Commands
@@ -462,12 +559,24 @@ to the real `obsidian` CLI:
 - `obsidian.command(id).run()`
 - `obsidian.dev.dom({ ... })`
 - `obsidian.dev.eval(code)`
+- `obsidian.dev.evalRaw(code)`
+- `obsidian.dev.diagnostics()`
+- `obsidian.dev.resetDiagnostics()`
+- `obsidian.metadata.fileCache(path)`
+- `obsidian.metadata.frontmatter(path)`
+- `obsidian.metadata.waitForFileCache(path, predicate?)`
+- `obsidian.metadata.waitForFrontmatter(path, predicate?)`
+- `obsidian.metadata.waitForMetadata(path, predicate?)`
 - `obsidian.dev.screenshot(path)`
 - `obsidian.tabs()`
 - `obsidian.workspace()`
 - `obsidian.open({ file? | path?, newTab? })`
 - `obsidian.openTab({ file?, group?, view? })`
 - `obsidian.sleep(ms)`
+- `obsidian.waitForActiveFile(path)`
+- `obsidian.waitForConsoleMessage(predicate)`
+- `obsidian.waitForNotice(predicate)`
+- `obsidian.waitForRuntimeError(predicate)`
 
 Example:
 
@@ -495,14 +604,14 @@ test("reloads the app and runs a plugin command when it becomes available", asyn
 `obsidian.app.restart()` waits for the app to come back by default. Pass
 `{ waitUntilReady: false }` if you need to manage readiness explicitly.
 
-## Vault And Plugin Wait Helpers
+## Vault, Metadata, And Plugin Wait Helpers
 
 The higher-level vault and plugin handles now expose the most common polling
 patterns directly, so tests do not need to hand-roll `waitFor()` loops around
 content reads, command discovery, or plugin data migration:
 
 ```ts
-test("waits for generated content and plugin state", async ({ obsidian, vault }) => {
+test("waits for generated content and plugin state", async ({ obsidian, sandbox, vault }) => {
   const plugin = obsidian.plugin("quickadd");
 
   await vault.write("queue.md", "pending", {
@@ -510,12 +619,19 @@ test("waits for generated content and plugin state", async ({ obsidian, vault })
   });
 
   await vault.waitForContent("queue.md", (content) => content.includes("pending"));
-
-  await plugin.reload({
-    waitUntilReady: true,
-    readyOptions: {
-      commandId: "quickadd:run-choice",
+  await sandbox.writeNote({
+    path: "Inbox/Today.md",
+    frontmatter: {
+      tags: ["daily"],
     },
+    body: "# Today\n",
+  });
+  await sandbox.waitForFrontmatter("Inbox/Today.md", (frontmatter) =>
+    frontmatter.tags.includes("daily"),
+  );
+
+  await plugin.updateDataAndReload<{ migrations: Record<string, boolean> }>((draft) => {
+    draft.migrations.quickadd_v2 = true;
   });
 
   await plugin.waitForData<{ migrations: Record<string, boolean> }>(
@@ -562,10 +678,43 @@ test("inspects live UI state", async ({ obsidian }) => {
 });
 ```
 
-`obsidian.dev.eval()` is the low-level escape hatch, while `dev.dom()` and
-`dev.screenshot()` give you safer wrappers around the built-in developer CLI
+`obsidian.dev.eval()` now uses a structured JSON envelope and throws remote
+stack information when the evaluated code fails. Use `obsidian.dev.evalRaw()`
+only when you intentionally need the unstructured CLI output. `dev.dom()` and
+`dev.screenshot()` remain the safer wrappers around the built-in developer CLI
 commands. Screenshot behavior depends on the active desktop environment, so
 start by validating it locally before relying on it in automation.
+
+## Layer Boundaries
+
+- `vault` stays filesystem-only. If the behavior depends on Obsidian parsing or
+  workspace state, it does not belong there.
+- `sandbox.readNote()` parses file content only. It does not imply that
+  Obsidian has indexed the note.
+- `sandbox.frontmatter()` and `obsidian.metadata.*` read metadata-cache state,
+  which is the right layer for frontmatter synchronization and race-sensitive
+  tests.
+- `obsidian.dev.eval()` is structured but still low-level. Prefer the
+  higher-level metadata, sandbox, wait, plugin, and matcher helpers first.
+
+## Migration Notes
+
+- If you relied on raw `obsidian.dev.eval()` output strings, switch those calls
+  to `obsidian.dev.evalRaw()`. The structured `eval()` path now expects JSON-safe
+  values and throws `DevEvalError` with the remote stack.
+- Prefer `sandbox.writeNote()` over hand-built YAML strings when the test is
+  describing note content rather than string formatting.
+- Prefer `plugin.updateDataAndReload()` or `plugin.withPatchedData()` over open-
+  coded patch/reload/restore sequences.
+
+## Regression Matrix
+
+- Metadata waits cover delayed file-cache population and frontmatter
+  synchronization after note writes.
+- Failure artifacts capture active note content, parsed frontmatter, recent
+  console/notices/runtime errors, and workspace snapshots.
+- Lifecycle cleanup restores tracked plugin data before disabling plugins and
+  removes sandbox content after teardown.
 
 ## End-To-End Workflow
 

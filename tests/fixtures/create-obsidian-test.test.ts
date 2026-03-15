@@ -103,7 +103,7 @@ function createTransport(): CommandTransport {
 
     if (command === "eval") {
       evalCalls.push(String(args.code ?? ""));
-      return createExecResult(request.bin, request.argv, "{}\n");
+      return createExecResult(request.bin, request.argv, '{"ok":true,"value":true}\n');
     }
 
     throw new Error(`Unhandled transport request: ${request.argv.join(" ")}`);

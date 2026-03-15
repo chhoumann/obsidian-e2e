@@ -18,7 +18,14 @@ const pluginTest = createPluginTest({
   pluginId: "quickadd",
   seedPluginData: { count: 2 },
   seedVault: {
-    "notes/seeded.md": "seeded content",
+    "notes/seeded.md": {
+      note: {
+        body: "seeded content",
+        frontmatter: {
+          tags: ["seeded"],
+        },
+      },
+    },
     "notes/state.json": { json: { ready: true } },
   },
   transport: createTransport(),
@@ -55,7 +62,9 @@ afterAll(async () => {
 
 pluginTest("injects plugin fixture and restores seeded state", async ({ plugin, vault }) => {
   expect(plugin.id).toBe("quickadd");
-  await expect(vault.read("notes/seeded.md")).resolves.toBe("seeded content");
+  await expect(vault.read("notes/seeded.md")).resolves.toBe(
+    "---\ntags:\n  - seeded\n---\nseeded content",
+  );
   await expect(vault.json<{ ready: boolean }>("notes/state.json").read()).resolves.toEqual({
     ready: true,
   });

@@ -2,16 +2,16 @@
 
 ## Summary
 
-- [ ] T1 App Harness + Structured Eval
-- [ ] T2 Metadata Cache Service
+- [x] T1 App Harness + Structured Eval
+- [x] T2 Metadata Cache Service
 - [x] T3 Note Model + YAML Serializer
-- [ ] T4 Sandbox Note/Frontmatter API
+- [x] T4 Sandbox Note/Frontmatter API
 - [x] T5 Plugin Data Ergonomics
-- [ ] T6 Public Test Context
-- [ ] T7 Obsidian Waits + Matchers
-- [ ] T8 Failure Artifact Expansion
-- [ ] T9 Fixture Refactor + Seed Support
-- [ ] T10 Docs + Migration + Regression Matrix
+- [x] T6 Public Test Context
+- [x] T7 Obsidian Waits + Matchers
+- [x] T8 Failure Artifact Expansion
+- [x] T9 Fixture Refactor + Seed Support
+- [x] T10 Docs + Migration + Regression Matrix
 
 Build these features around one shared foundation instead of adding more ad hoc
 `dev.eval(...)` calls and fixture-local polling.
@@ -320,6 +320,21 @@ Validation:
   including when callback execution fails.
 - Added focused plugin tests for enabled/disabled reload behavior, default
   readiness waiting, and restore-on-failure semantics.
+- Completed T1 and T2 by introducing a shared in-app harness, structured
+  `dev.eval()`/`dev.evalRaw()`, diagnostic buffers, and `obsidian.metadata`
+  file-cache/frontmatter read and wait helpers.
+- Completed T4 by layering `sandbox.readNote()`, `sandbox.writeNote()`,
+  `sandbox.frontmatter()`, `sandbox.waitForFrontmatter()`, and
+  `sandbox.waitForMetadata()` on top of the note model and metadata service.
+- Completed T6 through T9 by adding `createTestContext()` and
+  `withVaultSandbox()`, moving fixture lifecycle ownership onto the shared
+  context layer, and extending `seedVault` to accept `{ note }` descriptors.
+- Completed T7 and T8 by adding Obsidian-specific wait helpers, note and
+  frontmatter matchers, and expanded failure artifacts for active note content,
+  parsed frontmatter, console messages, notices, and runtime errors.
+- Completed T10 by updating the README with note helpers, metadata APIs,
+  lifecycle wrappers, migration notes, layer boundaries, and a regression
+  matrix.
 
 ## Files Modified Or Created
 
@@ -329,12 +344,35 @@ Validation:
 - `src/note/document.ts`
 - `src/plugin/plugin.ts`
 - `src/core/types.ts`
+- `src/core/client.ts`
+- `src/dev/harness.ts`
 - `src/index.ts`
+- `src/metadata/metadata.ts`
+- `src/matchers.ts`
+- `src/artifacts/failure-artifacts.ts`
+- `src/fixtures/base-fixtures.ts`
+- `src/fixtures/create-plugin-test.ts`
+- `src/fixtures/test-context.ts`
+- `src/fixtures/types.ts`
+- `src/vault/sandbox.ts`
+- `README.md`
 - `tests/note/document.test.ts`
+- `tests/core/client.test.ts`
 - `tests/core/plugin.test.ts`
+- `tests/vault/sandbox.test.ts`
+- `tests/matchers.test.ts`
+- `tests/fixtures/failure-artifacts.test.ts`
+- `tests/fixtures/create-obsidian-test.test.ts`
+- `tests/fixtures/create-plugin-test.test.ts`
+- `tests/fixtures/test-context.test.ts`
+- `tests/helpers/shared-vault-lock-fixture-child.test.ts`
+- `tests/helpers/stub-obsidian-client.ts`
 
 ## Errors Or Gotchas
 
 - Existing plugin readiness tests had to be updated for the new harness-based
   `dev.eval()` envelope format (`{ ok, value }`), since `=> true` mocks are no
   longer valid.
+- Mutable metadata-cache tests needed the stub client to retain shared object
+  references instead of cloning them at construction time; otherwise
+  `waitForMetadata()` and `frontmatter()` would never observe later updates.

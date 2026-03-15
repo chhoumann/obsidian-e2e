@@ -1,14 +1,22 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
+import { buildHarnessCallCode, parseHarnessEnvelope } from "../dev/harness";
 import type { ObsidianClient, PluginHandle } from "../core/types";
+import { parseNoteDocument } from "../note/document";
+import { createVaultApi } from "../vault/vault";
 
 export const DEFAULT_FAILURE_ARTIFACTS_DIR = ".obsidian-e2e-artifacts";
 
 export interface FailureArtifactOptions {
   activeFile?: boolean;
+  activeNote?: boolean;
+  consoleMessages?: boolean;
   dom?: boolean;
   editorText?: boolean;
+  notices?: boolean;
+  parsedFrontmatter?: boolean;
+  runtimeErrors?: boolean;
   screenshot?: boolean;
   tabs?: boolean;
   workspace?: boolean;
@@ -42,8 +50,13 @@ export function getFailureArtifactConfig(
       artifactsDir: path.resolve(options.artifactsDir ?? DEFAULT_FAILURE_ARTIFACTS_DIR),
       capture: {
         activeFile: true,
+        activeNote: true,
+        consoleMessages: true,
         dom: true,
         editorText: true,
+        notices: true,
+        parsedFrontmatter: true,
+        runtimeErrors: true,
         screenshot: true,
         tabs: true,
         workspace: true,
@@ -58,8 +71,13 @@ export function getFailureArtifactConfig(
     artifactsDir: path.resolve(options.artifactsDir ?? DEFAULT_FAILURE_ARTIFACTS_DIR),
     capture: {
       activeFile: overrides.activeFile ?? true,
+      activeNote: overrides.activeNote ?? true,
+      consoleMessages: overrides.consoleMessages ?? true,
       dom: overrides.dom ?? true,
       editorText: overrides.editorText ?? true,
+      notices: overrides.notices ?? true,
+      parsedFrontmatter: overrides.parsedFrontmatter ?? true,
+      runtimeErrors: overrides.runtimeErrors ?? true,
       screenshot: overrides.screenshot ?? true,
       tabs: overrides.tabs ?? true,
       workspace: overrides.workspace ?? true,
@@ -89,6 +107,9 @@ export async function captureFailureArtifacts(
 
   const artifactDirectory = getFailureArtifactDirectory(config.artifactsDir, task);
   await mkdir(artifactDirectory, { recursive: true });
+  const activeFile = await readActiveFilePath(obsidian);
+  const activeNote = activeFile ? await readActiveNoteSnapshot(obsidian, activeFile) : null;
+  const diagnostics = await obsidian.dev.diagnostics().catch(() => null);
 
   await Promise.all([
     captureJsonArtifact(
@@ -96,9 +117,21 @@ export async function captureFailureArtifacts(
       "active-file.json",
       config.capture.activeFile,
       async () => ({
-        activeFile: await obsidian.dev.eval<string | null>(
-          "app.workspace.getActiveFile()?.path ?? null",
-        ),
+        activeFile,
+      }),
+    ),
+    captureTextArtifact(
+      artifactDirectory,
+      "active-note.md",
+      config.capture.activeNote,
+      async () => activeNote?.raw ?? "",
+    ),
+    captureJsonArtifact(
+      artifactDirectory,
+      "active-note-frontmatter.json",
+      config.capture.parsedFrontmatter,
+      async () => ({
+        frontmatter: activeNote?.frontmatter ?? null,
       }),
     ),
     captureTextArtifact(artifactDirectory, "dom.txt", config.capture.dom, async () =>
@@ -110,10 +143,28 @@ export async function captureFailureArtifacts(
       ),
     ),
     captureJsonArtifact(artifactDirectory, "editor.json", config.capture.editorText, async () => ({
-      text: await obsidian.dev.eval<string | null>(
-        "app.workspace.activeLeaf?.view?.editor?.getValue?.() ?? null",
+      text: parseHarnessEnvelope<string | null>(
+        await obsidian.dev.evalRaw(buildHarnessCallCode("editorText")),
       ),
     })),
+    captureJsonArtifact(
+      artifactDirectory,
+      "console-messages.json",
+      config.capture.consoleMessages,
+      async () => diagnostics?.consoleMessages ?? [],
+    ),
+    captureJsonArtifact(
+      artifactDirectory,
+      "runtime-errors.json",
+      config.capture.runtimeErrors,
+      async () => diagnostics?.runtimeErrors ?? [],
+    ),
+    captureJsonArtifact(
+      artifactDirectory,
+      "notices.json",
+      config.capture.notices,
+      async () => diagnostics?.notices ?? [],
+    ),
     captureScreenshotArtifact(artifactDirectory, config.capture.screenshot, obsidian),
     captureJsonArtifact(artifactDirectory, "tabs.json", config.capture.tabs, () => obsidian.tabs()),
     captureJsonArtifact(artifactDirectory, "workspace.json", config.capture.workspace, () =>
@@ -231,4 +282,17 @@ function sanitizeForPath(value: string): string {
       .replace(/^-+|-+$/g, "")
       .slice(0, 60) || "test"
   );
+}
+
+async function readActiveFilePath(obsidian: ObsidianClient): Promise<string | null> {
+  return parseHarnessEnvelope<string | null>(
+    await obsidian.dev.evalRaw(buildHarnessCallCode("activeFilePath")),
+  );
+}
+
+async function readActiveNoteSnapshot(obsidian: ObsidianClient, activeFile: string) {
+  const vault = createVaultApi({ obsidian });
+  const raw = await vault.read(activeFile);
+
+  return parseNoteDocument(raw);
 }

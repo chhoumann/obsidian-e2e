@@ -2,14 +2,23 @@ import { isDeepStrictEqual } from "node:util";
 
 import { expect } from "vite-plus/test";
 
-import type { ObsidianClient, PluginHandle, SandboxApi, VaultApi } from "./core/types";
+import { buildHarnessCallCode, parseHarnessEnvelope } from "./dev/harness";
+import { parseNoteDocument } from "./note/document";
+import type {
+  NoteMatcherOptions,
+  NoteFrontmatter,
+  ObsidianClient,
+  PluginHandle,
+  SandboxApi,
+  VaultApi,
+} from "./core/types";
 
 type FileMatcherTarget = SandboxApi | VaultApi;
 
 expect.extend({
   async toHaveActiveFile(target: ObsidianClient, targetPath: string) {
-    const actual = await target.dev.eval<string | null>(
-      "app.workspace.getActiveFile()?.path ?? null",
+    const actual = parseHarnessEnvelope<string | null>(
+      await target.dev.evalRaw(buildHarnessCallCode("activeFilePath")),
     );
     const pass = actual === targetPath;
 
@@ -64,6 +73,20 @@ expect.extend({
       pass,
     };
   },
+  async toHaveFrontmatter(target: SandboxApi, targetPath: string, expected: NoteFrontmatter) {
+    const actual = await target.frontmatter(targetPath);
+    const pass = isDeepStrictEqual(actual, expected);
+
+    return {
+      message: () =>
+        pass
+          ? `Expected frontmatter for "${targetPath}" not to equal ${JSON.stringify(expected)}`
+          : `Expected frontmatter for "${targetPath}" to equal ${JSON.stringify(
+              expected,
+            )}, received ${JSON.stringify(actual)}`,
+      pass,
+    };
+  },
   async toHaveJsonFile(target: FileMatcherTarget, targetPath: string) {
     const exists = await target.exists(targetPath);
 
@@ -89,6 +112,35 @@ expect.extend({
         pass: false,
       };
     }
+  },
+  async toHaveNote(target: FileMatcherTarget, targetPath: string, expected: NoteMatcherOptions) {
+    const exists = await target.exists(targetPath);
+
+    if (!exists) {
+      return {
+        message: () => `Expected vault path to exist: ${targetPath}`,
+        pass: false,
+      };
+    }
+
+    const actual = parseNoteDocument(await target.read(targetPath));
+    const matchesFrontmatter =
+      expected.frontmatter === undefined ||
+      isDeepStrictEqual(actual.frontmatter, expected.frontmatter);
+    const matchesBody = expected.body === undefined || actual.body === expected.body;
+    const matchesBodyIncludes =
+      expected.bodyIncludes === undefined || actual.body.includes(expected.bodyIncludes);
+    const pass = matchesFrontmatter && matchesBody && matchesBodyIncludes;
+
+    return {
+      message: () =>
+        pass
+          ? `Expected vault path "${targetPath}" not to match the expected note shape`
+          : `Expected vault path "${targetPath}" to match the expected note shape, received ${JSON.stringify(
+              actual,
+            )}`,
+      pass,
+    };
   },
   async toHaveOpenTab(target: ObsidianClient, title: string, viewType?: string) {
     const tabs = await target.tabs();
@@ -123,8 +175,8 @@ expect.extend({
     };
   },
   async toHaveEditorTextContaining(target: ObsidianClient, needle: string) {
-    const actual = await target.dev.eval<string | null>(
-      "app.workspace.activeLeaf?.view?.editor?.getValue?.() ?? null",
+    const actual = parseHarnessEnvelope<string | null>(
+      await target.dev.evalRaw(buildHarnessCallCode("editorText")),
     );
     const pass = typeof actual === "string" && actual.includes(needle);
 
@@ -156,7 +208,9 @@ declare module "vite-plus/test" {
     toHaveEditorTextContaining(needle: string): Promise<T>;
     toHaveFile(path: string): Promise<T>;
     toHaveFileContaining(path: string, needle: string): Promise<T>;
+    toHaveFrontmatter(path: string, expected: NoteFrontmatter): Promise<T>;
     toHaveJsonFile(path: string): Promise<T>;
+    toHaveNote(path: string, expected: NoteMatcherOptions): Promise<T>;
     toHaveOpenTab(title: string, viewType?: string): Promise<T>;
     toHavePluginData(expected: unknown): Promise<T>;
     toHaveWorkspaceNode(label: string): Promise<T>;
@@ -168,7 +222,9 @@ declare module "vite-plus/test" {
     toHaveEditorTextContaining(needle: string): void;
     toHaveFile(path: string): void;
     toHaveFileContaining(path: string, needle: string): void;
+    toHaveFrontmatter(path: string, expected: NoteFrontmatter): void;
     toHaveJsonFile(path: string): void;
+    toHaveNote(path: string, expected: NoteMatcherOptions): void;
     toHaveOpenTab(title: string, viewType?: string): void;
     toHavePluginData(expected: unknown): void;
     toHaveWorkspaceNode(label: string): void;

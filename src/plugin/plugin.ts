@@ -1,5 +1,6 @@
 import path from "node:path";
 
+import { buildHarnessCallCode, parseHarnessEnvelope } from "../dev/harness";
 import { getClientInternals } from "../core/internals";
 import type {
   JsonFile,
@@ -24,13 +25,9 @@ export function createPluginHandle(client: ObsidianClient, id: string): PluginHa
 
   async function isLoadedInApp(): Promise<boolean> {
     try {
-      return await client.dev.eval<boolean>(`(() => {
-        const plugins = app?.plugins;
-        return Boolean(
-          plugins?.enabledPlugins?.has?.(${JSON.stringify(id)}) &&
-          plugins?.plugins?.[${JSON.stringify(id)}],
-        );
-      })()`);
+      return parseHarnessEnvelope<boolean>(
+        await client.dev.evalRaw(buildHarnessCallCode("pluginLoaded", id)),
+      );
     } catch {
       return false;
     }

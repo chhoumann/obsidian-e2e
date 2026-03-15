@@ -1,17 +1,16 @@
 import type { TestContext } from "vite-plus/test";
 
 import { createObsidianClient } from "../core/client";
-import { getClientInternals } from "../core/internals";
 import type { ObsidianClient, VaultApi } from "../core/types";
-import { createSandboxApi } from "../vault/sandbox";
 import { createVaultApi } from "../vault/vault";
-import { registerFailureArtifacts } from "./failure-artifacts";
-import type { CreateObsidianTestOptions } from "./types";
+import { createInternalTestContext } from "./test-context";
+import type { CreateObsidianTestOptions, TestContext as ObsidianTestContext } from "./types";
 import { acquireVaultRunLock, clearVaultRunLockMarker, type VaultRunLock } from "./vault-lock";
 
 export const DEFAULT_SANDBOX_ROOT = "__obsidian_e2e__";
 
 export interface BaseFixtureState {
+  _testContext: ObsidianTestContext;
   _vaultLock: VaultRunLock | null;
 }
 
@@ -58,50 +57,52 @@ export function createBaseFixtures(
       },
       { scope: "worker" },
     ],
-    // oxlint-disable-next-line no-empty-pattern
-    obsidian: async (
+    _testContext: async (
       {
         _vaultLock,
         onTestFailed,
         task,
       }: Pick<BaseFixtureState & TestContext, "_vaultLock" | "onTestFailed" | "task">,
-      use: (obsidian: ObsidianClient) => Promise<void>,
+      use: (context: ObsidianTestContext) => Promise<void>,
     ) => {
-      const obsidian = createObsidianClient(options);
+      let failedTask = false;
+      onTestFailed(() => {
+        failedTask = true;
+      });
 
-      await obsidian.verify();
-      if (_vaultLock) {
-        await _vaultLock.publishMarker(obsidian);
-      }
-      registerFailureArtifacts({ onTestFailed, task }, obsidian, options);
-
-      try {
-        await use(obsidian);
-      } finally {
-        await getClientInternals(obsidian).restoreAll();
-      }
-    },
-    sandbox: async (
-      { obsidian }: { obsidian: ObsidianClient },
-      use: (sandbox: Awaited<ReturnType<typeof createSandboxApi>>) => Promise<void>,
-    ) => {
-      const sandbox = await createSandboxApi({
-        obsidian,
-        sandboxRoot: options.sandboxRoot ?? DEFAULT_SANDBOX_ROOT,
-        testName: "test",
+      const context = await createInternalTestContext({
+        ...options,
+        createVault,
+        testName: task.name,
+        vaultLock: _vaultLock,
       });
 
       try {
-        await use(sandbox);
+        await use(context);
       } finally {
-        await sandbox.cleanup();
+        await context.cleanup({
+          failedTask: failedTask ? task : undefined,
+        });
       }
     },
+    // oxlint-disable-next-line no-empty-pattern
+    obsidian: async (
+      { _testContext }: Pick<BaseFixtureState, "_testContext">,
+      use: (obsidian: ObsidianClient) => Promise<void>,
+    ) => {
+      await use(_testContext.obsidian);
+    },
+    sandbox: async (
+      { _testContext }: Pick<BaseFixtureState, "_testContext">,
+      use: (sandbox: ObsidianTestContext["sandbox"]) => Promise<void>,
+    ) => {
+      await use(_testContext.sandbox);
+    },
     vault: async (
-      { obsidian }: { obsidian: ObsidianClient },
+      { _testContext }: Pick<BaseFixtureState, "_testContext">,
       use: (vault: VaultApi) => Promise<void>,
     ) => {
-      await use(await createVault(obsidian));
+      await use(_testContext.vault);
     },
   };
 }

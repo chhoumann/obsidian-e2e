@@ -1,17 +1,6 @@
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 
-export type NoteFrontmatter = Record<string, unknown>;
-
-export interface NoteDocument {
-  body: string;
-  frontmatter: NoteFrontmatter | null;
-  raw: string;
-}
-
-export interface NoteDocumentInput {
-  body?: string;
-  frontmatter?: NoteFrontmatter | null;
-}
+import type { NoteDocument, NoteFrontmatter, NoteInput } from "../core/types";
 
 export function parseNoteDocument(raw: string): NoteDocument {
   const normalizedRaw = normalizeLineEndings(raw);
@@ -26,6 +15,7 @@ export function parseNoteDocument(raw: string): NoteDocument {
   }
 
   const parsedFrontmatter = parseYaml(parsed.frontmatterRaw);
+
   if (
     parsedFrontmatter !== null &&
     (typeof parsedFrontmatter !== "object" || Array.isArray(parsedFrontmatter))
@@ -40,19 +30,22 @@ export function parseNoteDocument(raw: string): NoteDocument {
   };
 }
 
-export function stringifyNoteDocument(input: NoteDocumentInput): string {
+export function stringifyNoteDocument(input: NoteInput): string {
   const normalizedBody = normalizeLineEndings(input.body ?? "");
+
   if (!input.frontmatter) {
     return normalizedBody;
   }
 
   const frontmatterYaml = stringifyYaml(input.frontmatter).trimEnd();
   const frontmatterSection = frontmatterYaml ? `---\n${frontmatterYaml}\n---\n` : "---\n---\n";
+
   return `${frontmatterSection}${normalizedBody}`;
 }
 
-export function createNoteDocument(input: NoteDocumentInput): NoteDocument {
+export function createNoteDocument(input: NoteInput): NoteDocument {
   const raw = stringifyNoteDocument(input);
+
   return parseNoteDocument(raw);
 }
 
@@ -71,6 +64,7 @@ function parseFrontmatterBlock(raw: string): ParsedFrontmatterBlock | null {
   }
 
   const openingMatch = raw.match(/^---(?:\n|$)/u);
+
   if (!openingMatch) {
     return null;
   }
@@ -79,6 +73,7 @@ function parseFrontmatterBlock(raw: string): ParsedFrontmatterBlock | null {
   const closingMatcher = /(?:^|\n)(?:---|\.\.\.)(?:\n|$)/gu;
   closingMatcher.lastIndex = openLength;
   const closingMatch = closingMatcher.exec(raw);
+
   if (!closingMatch) {
     return null;
   }

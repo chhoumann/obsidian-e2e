@@ -100,7 +100,7 @@ function createTransport(): CommandTransport {
     if (command === "eval") {
       const code = String(args.code ?? "");
       await appendFile(getEnv("OBSIDIAN_E2E_EVAL_LOG"), `${code}\n`, "utf8");
-      return createExecResult(request.bin, request.argv, "{}\n");
+      return createExecResult(request.bin, request.argv, '{"ok":true,"value":true}\n');
     }
 
     throw new Error(`Unhandled transport request: ${request.argv.join(" ")}`);
