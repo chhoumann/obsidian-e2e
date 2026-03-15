@@ -80,6 +80,7 @@ export async function createInternalTestContext(
       }
 
       disposed = true;
+      const cleanupErrors: unknown[] = [];
 
       try {
         if (cleanupOptions.failedTask && options.captureOnFailure) {
@@ -91,7 +92,9 @@ export async function createInternalTestContext(
         } finally {
           for (const session of [...trackedPlugins.values()].reverse()) {
             if (!session.wasEnabled) {
-              await session.plugin.disable({ filter: session.filter });
+              await recordCleanupError(cleanupErrors, async () =>
+                session.plugin.disable({ filter: session.filter }),
+              );
             }
           }
 
@@ -100,11 +103,19 @@ export async function createInternalTestContext(
           } catch {}
 
           if (ownsVaultLock) {
-            await vaultLock.release();
+            await recordCleanupError(cleanupErrors, async () => vaultLock.release());
           }
 
-          await sandbox!.cleanup();
+          await recordCleanupError(cleanupErrors, async () => sandbox!.cleanup());
         }
+      }
+
+      if (cleanupErrors.length === 1) {
+        throw cleanupErrors[0];
+      }
+
+      if (cleanupErrors.length > 1) {
+        throw new AggregateError(cleanupErrors, "One or more test cleanup steps failed.");
       }
     };
 
@@ -160,6 +171,17 @@ export async function createInternalTestContext(
     }
 
     throw error;
+  }
+}
+
+async function recordCleanupError(
+  cleanupErrors: unknown[],
+  run: () => Promise<void>,
+): Promise<void> {
+  try {
+    await run();
+  } catch (error) {
+    cleanupErrors.push(error);
   }
 }
 

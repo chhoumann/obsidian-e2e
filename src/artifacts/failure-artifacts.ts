@@ -97,8 +97,12 @@ export async function captureFailureArtifacts(
 
   const artifactDirectory = getFailureArtifactDirectory(config.artifactsDir, task);
   await mkdir(artifactDirectory, { recursive: true });
-  const activeFile = await readActiveFilePath(obsidian);
-  const activeNote = activeFile ? await readActiveNoteSnapshot(obsidian, activeFile) : null;
+  const activeFile = readArtifactInput(() => readActiveFilePath(obsidian));
+  const activeNote = readArtifactInput(async () => {
+    const activeFilePath = await unwrapArtifactInput(activeFile);
+
+    return activeFilePath ? readActiveNoteSnapshot(obsidian, activeFilePath) : null;
+  });
   const diagnostics = await obsidian.dev.diagnostics().catch(() => null);
 
   await Promise.all([
@@ -107,21 +111,21 @@ export async function captureFailureArtifacts(
       "active-file.json",
       config.capture.activeFile,
       async () => ({
-        activeFile,
+        activeFile: await unwrapArtifactInput(activeFile),
       }),
     ),
     captureTextArtifact(
       artifactDirectory,
       "active-note.md",
       config.capture.activeNote,
-      async () => activeNote?.raw ?? "",
+      async () => (await unwrapArtifactInput(activeNote))?.raw ?? "",
     ),
     captureJsonArtifact(
       artifactDirectory,
       "active-note-frontmatter.json",
       config.capture.parsedFrontmatter,
       async () => ({
-        frontmatter: activeNote?.frontmatter ?? null,
+        frontmatter: (await unwrapArtifactInput(activeNote))?.frontmatter ?? null,
       }),
     ),
     captureTextArtifact(artifactDirectory, "dom.txt", config.capture.dom, async () =>
@@ -270,4 +274,27 @@ async function readActiveNoteSnapshot(obsidian: ObsidianClient, activeFile: stri
   const raw = await vault.read(activeFile);
 
   return parseNoteDocument(raw);
+}
+
+interface ArtifactInputResult<T> {
+  promise: Promise<{ error: unknown; ok: false } | { ok: true; value: T }>;
+}
+
+function readArtifactInput<T>(readValue: () => Promise<T>): ArtifactInputResult<T> {
+  return {
+    promise: readValue().then(
+      (value) => ({ ok: true, value }) as const,
+      (error) => ({ error, ok: false }) as const,
+    ),
+  };
+}
+
+async function unwrapArtifactInput<T>(result: ArtifactInputResult<T>): Promise<T> {
+  const value = await result.promise;
+
+  if (!value.ok) {
+    throw value.error;
+  }
+
+  return value.value;
 }

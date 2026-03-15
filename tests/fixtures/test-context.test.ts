@@ -76,13 +76,39 @@ describe("test context", () => {
 
     await expect(fs.access(path.join(vaultRoot, sandboxRoot))).rejects.toThrow();
   });
+
+  test("cleanup continues after plugin disable failures", async () => {
+    const vaultRoot = await createVaultRoot("obsidian-e2e-context-disable-failure-");
+    const transportCalls: string[][] = [];
+
+    const context = await createTestContext({
+      testName: "Context cleanup failure",
+      transport: createTransport(vaultRoot, transportCalls, {
+        failDisable: true,
+      }),
+      vault: "dev",
+    });
+
+    await context.plugin("quickadd", {
+      filter: "community",
+    });
+    await context.sandbox.write("inside.md", "inside");
+
+    const sandboxRoot = context.sandbox.root;
+    await expect(context.cleanup()).rejects.toThrow("disable failed");
+    await expect(fs.access(path.join(vaultRoot, sandboxRoot))).rejects.toThrow();
+  });
 });
 
 async function createVaultRoot(prefix: string): Promise<string> {
   return createTrackedTempDir(tempDirectories, prefix);
 }
 
-function createTransport(vaultRoot: string, transportCalls: string[][]): CommandTransport {
+function createTransport(
+  vaultRoot: string,
+  transportCalls: string[][],
+  options: { failDisable?: boolean } = {},
+): CommandTransport {
   let enabled = false;
 
   return async (request) => {
@@ -116,6 +142,10 @@ function createTransport(vaultRoot: string, transportCalls: string[][]): Command
     }
 
     if (command === "plugin:disable") {
+      if (options.failDisable) {
+        throw new Error("disable failed");
+      }
+
       enabled = false;
       return createExecResult(request.bin, request.argv, "");
     }

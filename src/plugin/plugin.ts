@@ -110,25 +110,32 @@ export function createPluginHandle(client: ObsidianClient, id: string): PluginHa
       run: (plugin: PluginHandle) => Promise<TResult> | TResult,
       options: PluginWithPatchedDataOptions<T> = {},
     ): Promise<TResult> {
-      const applyReloadOptions: PluginReloadOptions = options;
-      let patchedData: T | undefined;
+      const pluginWasEnabled = await this.isEnabled();
+      const reloadOptions = withDefaultReadyReloadOptions(options);
+      let hasPatchedData = false;
       let runResult: TResult | undefined;
       let runError: unknown;
       let restoreError: unknown;
 
       try {
-        patchedData = await this.updateDataAndReload<T>(updater, applyReloadOptions);
+        await this.data<T>().patch(updater);
+        hasPatchedData = true;
+
+        if (pluginWasEnabled) {
+          await this.reload(reloadOptions);
+        }
+
         runResult = await run(this);
       } catch (error) {
         runError = error;
       }
 
-      if (patchedData !== undefined) {
+      if (hasPatchedData) {
         try {
           await this.restoreData();
 
-          if (await this.isEnabled()) {
-            await this.reload(withDefaultReadyReloadOptions(options));
+          if (pluginWasEnabled) {
+            await this.reload(reloadOptions);
           }
         } catch (error) {
           restoreError = error;

@@ -323,6 +323,76 @@ describe("plugin data ergonomics", () => {
     const reloadCalls = transport.mock.calls.filter((call) => call[0].argv[1] === "plugin:reload");
     expect(reloadCalls).toHaveLength(2);
   });
+
+  test("withPatchedData restores original data when reload after patching fails", async () => {
+    const vaultRoot = await createVaultRoot();
+    const pluginDataPath = path.join(vaultRoot, ".obsidian", "plugins", "quickadd", "data.json");
+    await fs.mkdir(path.dirname(pluginDataPath), { recursive: true });
+    await fs.writeFile(pluginDataPath, '{\n  "count": 1\n}\n', "utf8");
+    let reloadAttempts = 0;
+
+    const transport = vi.fn<CommandTransport>().mockImplementation(async (request) => {
+      if (request.argv[0] === "--help") {
+        return createExecResult(request.bin, request.argv, "usage\n");
+      }
+
+      const [, command, ...rest] = request.argv;
+      const args = Object.fromEntries(
+        rest
+          .filter((entry) => entry.includes("="))
+          .map((entry) => {
+            const [key, ...value] = entry.split("=");
+            return [key, value.join("=")];
+          }),
+      );
+
+      if (command === "vault" && args.info === "path") {
+        return createExecResult(request.bin, request.argv, `${vaultRoot}\n`);
+      }
+
+      if (command === "plugin") {
+        return createExecResult(request.bin, request.argv, "enabled\ttrue\n");
+      }
+
+      if (command === "plugin:reload") {
+        reloadAttempts += 1;
+
+        if (reloadAttempts === 1) {
+          throw new Error("reload failed");
+        }
+
+        return createExecResult(request.bin, request.argv, "");
+      }
+
+      if (command === "eval") {
+        return createExecResult(
+          request.bin,
+          request.argv,
+          `${JSON.stringify({ ok: true, value: true })}\n`,
+        );
+      }
+
+      throw new Error(`Unhandled transport request: ${request.argv.join(" ")}`);
+    });
+
+    const client = createObsidianClient({
+      transport,
+      vault: "dev",
+    });
+    const plugin = client.plugin("quickadd");
+
+    await expect(
+      plugin.withPatchedData<{ count: number }, number>(
+        (draft) => {
+          draft.count = 3;
+        },
+        async () => 3,
+      ),
+    ).rejects.toThrow("reload failed");
+
+    await expect(plugin.data<{ count: number }>().read()).resolves.toEqual({ count: 1 });
+    expect(reloadAttempts).toBe(2);
+  });
 });
 
 async function createVaultRoot(): Promise<string> {

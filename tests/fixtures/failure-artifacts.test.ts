@@ -131,6 +131,53 @@ describe("failure artifacts", () => {
     );
   });
 
+  test("continues capturing other artifacts when the active note cannot be read", async () => {
+    const artifactsDir = await createTrackedTempDir(tempDirectories, "obsidian-e2e-artifacts-");
+    const vaultRoot = await createTrackedTempDir(tempDirectories, "obsidian-e2e-artifacts-vault-");
+    const obsidian = createStubObsidianClient({
+      activeFile: "Inbox/Missing.md",
+      consoleMessages: [{ args: ["saved"], at: 1, level: "log", text: "saved" }],
+      domResult: "<div>Workspace</div>",
+      editorText: "# Missing",
+      onScreenshot: async (targetPath) => {
+        await fs.writeFile(targetPath, "png", "utf8");
+        return targetPath;
+      },
+      tabs: [{ id: "1", title: "Missing", viewType: "markdown" }],
+      vaultRoot,
+      workspace: [{ children: [], id: "main", label: "main" }],
+    });
+
+    await captureFailureArtifacts(
+      {
+        id: "file_test_aabbccdd",
+        name: "captures the rest of the bundle",
+      },
+      obsidian,
+      {
+        artifactsDir,
+        captureOnFailure: true,
+      },
+    );
+
+    const artifactRoot = path.join(artifactsDir, "captures-the-rest-of-the-bundle-aabbccdd");
+    await expect(
+      fs.readFile(path.join(artifactRoot, "active-note.md.error.txt"), "utf8"),
+    ).resolves.toContain("ENOENT");
+    await expect(
+      fs.readFile(path.join(artifactRoot, "active-note-frontmatter.json.error.txt"), "utf8"),
+    ).resolves.toContain("ENOENT");
+    await expect(
+      fs.readFile(path.join(artifactRoot, "console-messages.json"), "utf8"),
+    ).resolves.toContain('"saved"');
+    await expect(fs.readFile(path.join(artifactRoot, "workspace.json"), "utf8")).resolves.toContain(
+      '"main"',
+    );
+    await expect(fs.readFile(path.join(artifactRoot, "screenshot.png"), "utf8")).resolves.toBe(
+      "png",
+    );
+  });
+
   test("captures plugin data through the standalone API", async () => {
     const artifactsDir = await createTrackedTempDir(
       tempDirectories,
