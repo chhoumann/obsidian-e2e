@@ -6,6 +6,7 @@ import { afterAll, beforeAll, expect } from "vite-plus/test";
 
 import { createObsidianTest } from "../../src/vitest";
 import { createExecResult } from "../helpers/create-exec-result";
+import { createTempDir } from "../helpers/create-temp-dir";
 import type { CommandTransport } from "../../src/core/types";
 
 let sandboxRootPath = "";
@@ -23,7 +24,7 @@ const fixtureTest = createObsidianTest({
 });
 
 beforeAll(async () => {
-  vaultRoot = await fs.mkdtemp(path.join(os.tmpdir(), "obsidian-e2e-fixtures-"));
+  vaultRoot = await createTempDir([], "obsidian-e2e-fixtures-");
 
   await fs.mkdir(path.join(vaultRoot, ".obsidian", "plugins", "quickadd"), {
     recursive: true,

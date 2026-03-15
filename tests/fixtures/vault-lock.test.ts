@@ -1,5 +1,4 @@
 import { promises as fs } from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { createInterface } from "node:readline";
@@ -13,6 +12,10 @@ import {
   inspectVaultRunLock,
   readVaultRunLockMarker,
 } from "../../src/fixtures/vault-lock";
+import {
+  cleanupTempDirectories,
+  createTempDir as createTrackedTempDir,
+} from "../helpers/create-temp-dir";
 import { createStubObsidianClient } from "../helpers/stub-obsidian-client";
 
 const tempDirectories: string[] = [];
@@ -25,16 +28,12 @@ afterEach(async () => {
     }
   }
   childProcesses.clear();
-  await Promise.all(
-    tempDirectories
-      .splice(0)
-      .map((directory) => fs.rm(directory, { force: true, recursive: true })),
-  );
+  await cleanupTempDirectories(tempDirectories);
 });
 
 describe("vault lock", () => {
   test("acquires and releases a shared vault lock", async () => {
-    const lockRoot = await createTempDir("obsidian-e2e-locks-");
+    const lockRoot = await createTrackedTempDir(tempDirectories, "obsidian-e2e-locks-");
     const lock = await acquireVaultRunLock({
       heartbeatMs: 10_000,
       lockRoot,
@@ -50,7 +49,7 @@ describe("vault lock", () => {
   });
 
   test("fails fast when the shared vault lock is already held", async () => {
-    const lockRoot = await createTempDir("obsidian-e2e-locks-");
+    const lockRoot = await createTrackedTempDir(tempDirectories, "obsidian-e2e-locks-");
     const vaultPath = "/tmp/dev-vault";
     const lockDir = path.join(
       lockRoot,
@@ -88,7 +87,7 @@ describe("vault lock", () => {
   });
 
   test("reuses the same shared vault lock within one process", async () => {
-    const lockRoot = await createTempDir("obsidian-e2e-locks-");
+    const lockRoot = await createTrackedTempDir(tempDirectories, "obsidian-e2e-locks-");
     const firstLock = await acquireVaultRunLock({
       heartbeatMs: 10_000,
       lockRoot,
@@ -114,7 +113,7 @@ describe("vault lock", () => {
   });
 
   test("steals a stale shared vault lock", async () => {
-    const lockRoot = await createTempDir("obsidian-e2e-locks-");
+    const lockRoot = await createTrackedTempDir(tempDirectories, "obsidian-e2e-locks-");
     const staleVaultPath = "/tmp/stale-vault";
     const staleLockDir = path.join(
       lockRoot,
@@ -156,7 +155,7 @@ describe("vault lock", () => {
   test("publishes and clears the app marker through dev eval", async () => {
     const evalCalls: string[] = [];
     let currentMarker: unknown = null;
-    const lockRoot = await createTempDir("obsidian-e2e-locks-");
+    const lockRoot = await createTrackedTempDir(tempDirectories, "obsidian-e2e-locks-");
     const lock = await acquireVaultRunLock({
       heartbeatMs: 10_000,
       lockRoot,
@@ -200,7 +199,7 @@ describe("vault lock", () => {
   });
 
   test("inspects the current filesystem lock state", async () => {
-    const lockRoot = await createTempDir("obsidian-e2e-locks-");
+    const lockRoot = await createTrackedTempDir(tempDirectories, "obsidian-e2e-locks-");
     const vaultPath = "/tmp/dev-vault";
     const lock = await acquireVaultRunLock({
       heartbeatMs: 10_000,
@@ -229,7 +228,7 @@ describe("vault lock", () => {
   });
 
   test("serializes lock acquisition across separate processes", async () => {
-    const lockRoot = await createTempDir("obsidian-e2e-locks-");
+    const lockRoot = await createTrackedTempDir(tempDirectories, "obsidian-e2e-locks-");
     const vaultPath = "/tmp/dev-vault";
     const holder = spawnVaultLockChild("hold", lockRoot, vaultPath);
     await holder.nextEvent("attempting");
@@ -270,7 +269,7 @@ describe("vault lock", () => {
   });
 
   test("allows another process to take over a stale lock after the holder exits", async () => {
-    const lockRoot = await createTempDir("obsidian-e2e-locks-");
+    const lockRoot = await createTrackedTempDir(tempDirectories, "obsidian-e2e-locks-");
     const vaultPath = "/tmp/dev-vault";
     const staleMs = 150;
     const crashedHolder = spawnVaultLockChild("crash-after-acquire", lockRoot, vaultPath, staleMs);
@@ -315,12 +314,6 @@ describe("vault lock", () => {
     childProcesses.delete(waiter.child);
   });
 });
-
-async function createTempDir(prefix: string): Promise<string> {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
-  tempDirectories.push(directory);
-  return directory;
-}
 
 type VaultLockChildMode = "acquire-and-release" | "crash-after-acquire" | "hold";
 

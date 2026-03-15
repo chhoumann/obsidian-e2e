@@ -44,9 +44,26 @@ export function stringifyNoteDocument(input: NoteInput): string {
 }
 
 export function createNoteDocument(input: NoteInput): NoteDocument {
-  const raw = stringifyNoteDocument(input);
+  const body = normalizeLineEndings(input.body ?? "");
 
-  return parseNoteDocument(raw);
+  if (input.frontmatter === undefined || input.frontmatter === null) {
+    return {
+      body,
+      frontmatter: null,
+      raw: stringifyNoteDocument({ body }),
+    };
+  }
+
+  const frontmatter = cloneFrontmatter(input.frontmatter);
+
+  return {
+    body,
+    frontmatter,
+    raw: stringifyNoteDocument({
+      body,
+      frontmatter,
+    }),
+  };
 }
 
 interface ParsedFrontmatterBlock {
@@ -56,6 +73,12 @@ interface ParsedFrontmatterBlock {
 
 function normalizeLineEndings(value: string): string {
   return value.replace(/\r\n?/gu, "\n");
+}
+
+function cloneFrontmatter<TFrontmatter extends NoteFrontmatter>(
+  frontmatter: TFrontmatter,
+): TFrontmatter {
+  return JSON.parse(JSON.stringify(frontmatter)) as TFrontmatter;
 }
 
 function parseFrontmatterBlock(raw: string): ParsedFrontmatterBlock | null {

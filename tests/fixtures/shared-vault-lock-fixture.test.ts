@@ -1,6 +1,5 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { spawn, type ChildProcessByStdio } from "node:child_process";
-import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import type { Readable } from "node:stream";
@@ -9,6 +8,10 @@ import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, test } from "vite-plus/test";
 
 import { inspectVaultRunLock, type VaultRunLockState } from "../../src/fixtures/vault-lock";
+import {
+  cleanupTempDirectories,
+  createTempDir as createTrackedTempDir,
+} from "../helpers/create-temp-dir";
 
 const tempDirectories: string[] = [];
 const childProcesses = new Set<ChildProcessByStdio<null, Readable, Readable>>();
@@ -20,10 +23,7 @@ afterEach(async () => {
     }
   }
   childProcesses.clear();
-
-  await Promise.all(
-    tempDirectories.splice(0).map((directory) => rm(directory, { force: true, recursive: true })),
-  );
+  await cleanupTempDirectories(tempDirectories);
 });
 
 describe("shared vault lock fixture integration", () => {
@@ -329,7 +329,5 @@ async function waitForExitOrKill(
 }
 
 async function createTempDir(prefix: string): Promise<string> {
-  const directory = await mkdtemp(path.join(os.tmpdir(), prefix));
-  tempDirectories.push(directory);
-  return directory;
+  return createTrackedTempDir(tempDirectories, prefix);
 }

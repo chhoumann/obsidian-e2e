@@ -542,7 +542,9 @@ describe("createObsidianClient", () => {
 
   test("waits for active files and harness diagnostics", async () => {
     let activeFileAttempts = 0;
-    let diagnosticsAttempts = 0;
+    let consoleAttempts = 0;
+    let noticeAttempts = 0;
+    let runtimeErrorAttempts = 0;
 
     const transport = vi.fn<CommandTransport>().mockImplementation(async (request) => {
       if (request.argv[1] !== "eval") {
@@ -565,8 +567,8 @@ describe("createObsidianClient", () => {
         };
       }
 
-      if (code.includes('const __obsidianE2EMethod = "diagnostics"')) {
-        diagnosticsAttempts += 1;
+      if (code.includes('const __obsidianE2EMethod = "consoleMessages"')) {
+        consoleAttempts += 1;
         return {
           argv: request.argv,
           command: request.bin,
@@ -574,13 +576,35 @@ describe("createObsidianClient", () => {
           stderr: "",
           stdout: JSON.stringify({
             ok: true,
-            value: {
-              consoleMessages:
-                diagnosticsAttempts > 1 ? [{ args: [], at: 1, level: "log", text: "done" }] : [],
-              notices: diagnosticsAttempts > 2 ? [{ at: 2, message: "Saved" }] : [],
-              runtimeErrors:
-                diagnosticsAttempts > 3 ? [{ at: 3, message: "boom", source: "error" }] : [],
-            },
+            value: consoleAttempts > 1 ? [{ args: [], at: 1, level: "log", text: "done" }] : [],
+          }),
+        };
+      }
+
+      if (code.includes('const __obsidianE2EMethod = "notices"')) {
+        noticeAttempts += 1;
+        return {
+          argv: request.argv,
+          command: request.bin,
+          exitCode: 0,
+          stderr: "",
+          stdout: JSON.stringify({
+            ok: true,
+            value: noticeAttempts > 1 ? [{ at: 2, message: "Saved" }] : [],
+          }),
+        };
+      }
+
+      if (code.includes('const __obsidianE2EMethod = "runtimeErrors"')) {
+        runtimeErrorAttempts += 1;
+        return {
+          argv: request.argv,
+          command: request.bin,
+          exitCode: 0,
+          stderr: "",
+          stdout: JSON.stringify({
+            ok: true,
+            value: runtimeErrorAttempts > 1 ? [{ at: 3, message: "boom", source: "error" }] : [],
           }),
         };
       }

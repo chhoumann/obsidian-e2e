@@ -1,5 +1,4 @@
 import { promises as fs } from "node:fs";
-import os from "node:os";
 import path from "node:path";
 
 import { afterEach, describe, expect, test } from "vite-plus/test";
@@ -15,16 +14,16 @@ import {
   registerFailureArtifacts,
   registerPluginFailureArtifacts,
 } from "../../src/fixtures/failure-artifacts";
+import {
+  cleanupTempDirectories,
+  createTempDir as createTrackedTempDir,
+} from "../helpers/create-temp-dir";
 import { createStubObsidianClient } from "../helpers/stub-obsidian-client";
 
 const tempDirectories: string[] = [];
 
 afterEach(async () => {
-  await Promise.all(
-    tempDirectories
-      .splice(0)
-      .map((directory) => fs.rm(directory, { force: true, recursive: true })),
-  );
+  await cleanupTempDirectories(tempDirectories);
 });
 
 describe("failure artifacts", () => {
@@ -48,8 +47,8 @@ describe("failure artifacts", () => {
   });
 
   test("captures core Obsidian artifacts on failure", async () => {
-    const artifactsDir = await createTempDir("obsidian-e2e-artifacts-");
-    const vaultRoot = await createTempDir("obsidian-e2e-artifacts-vault-");
+    const artifactsDir = await createTrackedTempDir(tempDirectories, "obsidian-e2e-artifacts-");
+    const vaultRoot = await createTrackedTempDir(tempDirectories, "obsidian-e2e-artifacts-vault-");
     await fs.mkdir(path.join(vaultRoot, "Inbox"), { recursive: true });
     await fs.writeFile(
       path.join(vaultRoot, "Inbox", "Today.md"),
@@ -133,8 +132,11 @@ describe("failure artifacts", () => {
   });
 
   test("captures plugin data through the standalone API", async () => {
-    const artifactsDir = await createTempDir("obsidian-e2e-plugin-artifacts-");
-    const vaultRoot = await createTempDir("obsidian-e2e-plugin-vault-");
+    const artifactsDir = await createTrackedTempDir(
+      tempDirectories,
+      "obsidian-e2e-plugin-artifacts-",
+    );
+    const vaultRoot = await createTrackedTempDir(tempDirectories, "obsidian-e2e-plugin-vault-");
     const pluginDataPath = path.join(vaultRoot, ".obsidian", "plugins", "quickadd", "data.json");
     await fs.mkdir(path.dirname(pluginDataPath), { recursive: true });
     await fs.writeFile(pluginDataPath, `${JSON.stringify({ enabled: true }, null, 2)}\n`, "utf8");
@@ -168,8 +170,14 @@ describe("failure artifacts", () => {
   });
 
   test("captures plugin data without duplicating core artifacts", async () => {
-    const artifactsDir = await createTempDir("obsidian-e2e-plugin-only-artifacts-");
-    const vaultRoot = await createTempDir("obsidian-e2e-plugin-only-vault-");
+    const artifactsDir = await createTrackedTempDir(
+      tempDirectories,
+      "obsidian-e2e-plugin-only-artifacts-",
+    );
+    const vaultRoot = await createTrackedTempDir(
+      tempDirectories,
+      "obsidian-e2e-plugin-only-vault-",
+    );
     const pluginDataPath = path.join(vaultRoot, ".obsidian", "plugins", "quickadd", "data.json");
     await fs.mkdir(path.dirname(pluginDataPath), { recursive: true });
     await fs.writeFile(pluginDataPath, `${JSON.stringify({ enabled: true }, null, 2)}\n`, "utf8");
@@ -252,9 +260,3 @@ describe("failure artifacts", () => {
     expect(screenshotCalls).toBe(1);
   });
 });
-
-async function createTempDir(prefix: string): Promise<string> {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
-  tempDirectories.push(directory);
-  return directory;
-}

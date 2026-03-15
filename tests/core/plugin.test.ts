@@ -1,9 +1,12 @@
 import { promises as fs } from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { createObsidianClient } from "../../src/core/client";
 import { sleep, waitForValue } from "../../src/core/wait";
+import {
+  cleanupTempDirectories,
+  createTempDir as createTrackedTempDir,
+} from "../helpers/create-temp-dir";
 import { createStubObsidianClient } from "../helpers/stub-obsidian-client";
 import { createExecResult } from "../helpers/create-exec-result";
 import type { CommandTransport } from "../../src/core/types";
@@ -11,11 +14,7 @@ import type { CommandTransport } from "../../src/core/types";
 const tempDirectories: string[] = [];
 
 afterEach(async () => {
-  await Promise.all(
-    tempDirectories
-      .splice(0)
-      .map((directory) => fs.rm(directory, { force: true, recursive: true })),
-  );
+  await cleanupTempDirectories(tempDirectories);
 });
 
 describe("plugin data restore", () => {
@@ -327,9 +326,7 @@ describe("plugin data ergonomics", () => {
 });
 
 async function createVaultRoot(): Promise<string> {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "obsidian-e2e-plugin-"));
-  tempDirectories.push(directory);
-  return directory;
+  return createTrackedTempDir(tempDirectories, "obsidian-e2e-plugin-");
 }
 
 function createFakeClient(vaultRoot: string) {

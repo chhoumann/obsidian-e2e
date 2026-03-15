@@ -1,5 +1,4 @@
 import { promises as fs } from "node:fs";
-import os from "node:os";
 import path from "node:path";
 
 import { afterEach, describe, expect, test } from "vite-plus/test";
@@ -7,15 +6,15 @@ import { afterEach, describe, expect, test } from "vite-plus/test";
 import { createTestContext, withVaultSandbox } from "../../src";
 import { createExecResult } from "../helpers/create-exec-result";
 import type { CommandTransport } from "../../src/core/types";
+import {
+  cleanupTempDirectories,
+  createTempDir as createTrackedTempDir,
+} from "../helpers/create-temp-dir";
 
 const tempDirectories: string[] = [];
 
 afterEach(async () => {
-  await Promise.all(
-    tempDirectories
-      .splice(0)
-      .map((directory) => fs.rm(directory, { force: true, recursive: true })),
-  );
+  await cleanupTempDirectories(tempDirectories);
 });
 
 describe("test context", () => {
@@ -80,9 +79,7 @@ describe("test context", () => {
 });
 
 async function createVaultRoot(prefix: string): Promise<string> {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
-  tempDirectories.push(directory);
-  return directory;
+  return createTrackedTempDir(tempDirectories, prefix);
 }
 
 function createTransport(vaultRoot: string, transportCalls: string[][]): CommandTransport {

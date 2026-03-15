@@ -89,7 +89,7 @@ export interface VaultWriteOptions {
 
 export type MetadataPredicate<T = MetadataFileCache> = (metadata: T) => boolean | Promise<boolean>;
 
-export interface MetadataWaitOptions extends WaitForOptions {}
+export type MetadataWaitOptions = WaitForOptions;
 
 export interface SandboxWriteNoteOptions<
   TFrontmatter extends NoteFrontmatter | null = NoteFrontmatter | null,
@@ -114,13 +114,13 @@ export interface PluginReloadOptions extends ExecOptions {
   waitUntilReady?: boolean;
 }
 
-export interface PluginUpdateDataOptions<T> extends PluginReloadOptions {
+export interface PluginPatchDataOptions<T> extends PluginReloadOptions {
   patch?: JsonFileUpdater<T>;
 }
 
-export interface PluginWithPatchedDataOptions<T> extends PluginReloadOptions {
-  patch?: JsonFileUpdater<T>;
-}
+export type PluginUpdateDataOptions<T> = PluginPatchDataOptions<T>;
+
+export type PluginWithPatchedDataOptions<T> = PluginPatchDataOptions<T>;
 
 export interface ExecResult {
   argv: string[];
@@ -225,11 +225,16 @@ export interface ObsidianCommandHandle {
 }
 
 export interface ObsidianDevHandle {
+  activeFilePath(execOptions?: ExecOptions): Promise<string | null>;
+  consoleMessages(execOptions?: ExecOptions): Promise<DevConsoleMessage[]>;
   diagnostics(execOptions?: ExecOptions): Promise<DevDiagnostics>;
   dom(options: DevDomQueryOptions, execOptions?: ExecOptions): Promise<DevDomResult>;
+  editorText(execOptions?: ExecOptions): Promise<string | null>;
   eval<T = unknown>(code: string, options?: ExecOptions): Promise<T>;
   evalRaw(code: string, options?: ExecOptions): Promise<string>;
+  notices(execOptions?: ExecOptions): Promise<DevNoticeEvent[]>;
   resetDiagnostics(execOptions?: ExecOptions): Promise<void>;
+  runtimeErrors(execOptions?: ExecOptions): Promise<DevRuntimeError[]>;
   screenshot(path: string, options?: ExecOptions): Promise<string>;
 }
 

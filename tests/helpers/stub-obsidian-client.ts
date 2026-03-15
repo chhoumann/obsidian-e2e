@@ -15,6 +15,7 @@ import type {
   WorkspaceNode,
   WorkspaceTab,
 } from "../../src/core/types";
+import type { HarnessMethodName } from "../../src/dev/harness";
 
 type Awaitable<T> = Promise<T> | T;
 
@@ -81,11 +82,20 @@ export function createStubObsidianClient(options: CreateStubObsidianClientOption
       return [...commandSet];
     },
     dev: {
+      async activeFilePath() {
+        return activeFile;
+      },
+      async consoleMessages() {
+        return structuredClone(diagnostics.consoleMessages);
+      },
       async diagnostics() {
         return structuredClone(diagnostics);
       },
       async dom() {
         return domResult;
+      },
+      async editorText() {
+        return editorText;
       },
       async eval(code: string) {
         if (options.onEval) {
@@ -127,10 +137,16 @@ export function createStubObsidianClient(options: CreateStubObsidianClientOption
 
         return code;
       },
+      async notices() {
+        return structuredClone(diagnostics.notices);
+      },
       async resetDiagnostics() {
         diagnostics.consoleMessages.splice(0);
         diagnostics.notices.splice(0);
         diagnostics.runtimeErrors.splice(0);
+      },
+      async runtimeErrors() {
+        return structuredClone(diagnostics.runtimeErrors);
       },
       async screenshot(path: string) {
         if (options.onScreenshot) {
@@ -296,7 +312,7 @@ function runHarnessEval(
     return undefined;
   }
 
-  const method = methodMatch[1];
+  const method = methodMatch[1] as HarnessMethodName;
   const args = argsMatch ? (JSON.parse(argsMatch[1]!) as unknown[]) : [];
 
   const ok = (value: unknown) => JSON.stringify({ ok: true, value });
@@ -304,6 +320,8 @@ function runHarnessEval(
   switch (method) {
     case "activeFilePath":
       return ok(state.activeFile);
+    case "consoleMessages":
+      return ok(state.diagnostics.consoleMessages);
     case "diagnostics":
       return ok(state.diagnostics);
     case "editorText":
@@ -314,6 +332,8 @@ function runHarnessEval(
       return ok(state.metadataByPath[String(args[0])]?.frontmatter ?? null);
     case "metadata":
       return ok(state.metadataByPath[String(args[0])] ?? null);
+    case "notices":
+      return ok(state.diagnostics.notices);
     case "pluginLoaded":
       return ok(true);
     case "resetDiagnostics":
@@ -321,6 +341,8 @@ function runHarnessEval(
       state.diagnostics.notices.splice(0);
       state.diagnostics.runtimeErrors.splice(0);
       return ok(true);
+    case "runtimeErrors":
+      return ok(state.diagnostics.runtimeErrors);
     default:
       return undefined;
   }

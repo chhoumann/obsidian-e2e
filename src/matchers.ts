@@ -2,7 +2,6 @@ import { isDeepStrictEqual } from "node:util";
 
 import { expect } from "vite-plus/test";
 
-import { buildHarnessCallCode, parseHarnessEnvelope } from "./dev/harness";
 import { parseNoteDocument } from "./note/document";
 import type {
   NoteMatcherOptions,
@@ -17,9 +16,7 @@ type FileMatcherTarget = SandboxApi | VaultApi;
 
 expect.extend({
   async toHaveActiveFile(target: ObsidianClient, targetPath: string) {
-    const actual = parseHarnessEnvelope<string | null>(
-      await target.dev.evalRaw(buildHarnessCallCode("activeFilePath")),
-    );
+    const actual = await target.dev.activeFilePath();
     const pass = actual === targetPath;
 
     return {
@@ -114,16 +111,20 @@ expect.extend({
     }
   },
   async toHaveNote(target: FileMatcherTarget, targetPath: string, expected: NoteMatcherOptions) {
-    const exists = await target.exists(targetPath);
+    let actual: ReturnType<typeof parseNoteDocument>;
 
-    if (!exists) {
+    try {
+      actual = parseNoteDocument(await target.read(targetPath));
+    } catch (error) {
       return {
-        message: () => `Expected vault path to exist: ${targetPath}`,
+        message: () =>
+          `Expected vault path "${targetPath}" to be readable as a note, but reading failed: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
         pass: false,
       };
     }
 
-    const actual = parseNoteDocument(await target.read(targetPath));
     const matchesFrontmatter =
       expected.frontmatter === undefined ||
       isDeepStrictEqual(actual.frontmatter, expected.frontmatter);
@@ -175,9 +176,7 @@ expect.extend({
     };
   },
   async toHaveEditorTextContaining(target: ObsidianClient, needle: string) {
-    const actual = parseHarnessEnvelope<string | null>(
-      await target.dev.evalRaw(buildHarnessCallCode("editorText")),
-    );
+    const actual = await target.dev.editorText();
     const pass = typeof actual === "string" && actual.includes(needle);
 
     return {

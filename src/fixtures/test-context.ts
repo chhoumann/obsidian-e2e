@@ -5,6 +5,7 @@ import { captureFailureArtifacts } from "../artifacts/failure-artifacts";
 import type { ObsidianClient, PluginHandle, VaultApi } from "../core/types";
 import { createSandboxApi } from "../vault/sandbox";
 import { createVaultApi } from "../vault/vault";
+import { DEFAULT_SANDBOX_ROOT } from "./base-fixtures";
 import { acquireVaultRunLock, clearVaultRunLockMarker, type VaultRunLock } from "./vault-lock";
 import type { CreateObsidianTestOptions, PluginSessionOptions, TestContext } from "./types";
 
@@ -45,8 +46,8 @@ export async function createInternalTestContext(
   const obsidian = createObsidianClient(options);
   const trackedPlugins = new Map<string, TrackedPluginSession>();
   let sandbox: Awaited<ReturnType<typeof createSandboxApi>> | null = null;
-  const ownedLock = options.vaultLock ? null : await maybeAcquireVaultLock(options, obsidian);
-  const vaultLock = options.vaultLock ?? ownedLock;
+  const vaultLock = options.vaultLock ?? (await maybeAcquireVaultLock(options, obsidian));
+  const ownsVaultLock = options.vaultLock === undefined && vaultLock !== null;
   const vaultFactory =
     options.createVault ?? ((client: ObsidianClient) => createVaultApi({ obsidian: client }));
   let disposed = false;
@@ -63,7 +64,7 @@ export async function createInternalTestContext(
     const vault = await vaultFactory(obsidian);
     sandbox = await createSandboxApi({
       obsidian,
-      sandboxRoot: options.sandboxRoot ?? "__obsidian_e2e__",
+      sandboxRoot: options.sandboxRoot ?? DEFAULT_SANDBOX_ROOT,
       testName: options.testName ?? "test",
     });
 
@@ -98,8 +99,8 @@ export async function createInternalTestContext(
             await clearVaultRunLockMarker(obsidian);
           } catch {}
 
-          if (ownedLock) {
-            await ownedLock.release();
+          if (ownsVaultLock) {
+            await vaultLock.release();
           }
 
           await sandbox!.cleanup();
@@ -153,8 +154,8 @@ export async function createInternalTestContext(
         await clearVaultRunLockMarker(obsidian);
       } catch {}
 
-      if (ownedLock) {
-        await ownedLock.release();
+      if (ownsVaultLock) {
+        await vaultLock.release();
       }
     }
 

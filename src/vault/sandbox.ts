@@ -8,6 +8,7 @@ import type {
   SandboxApi,
   SandboxWriteNoteOptions,
 } from "../core/types";
+import { sanitizePathSegment } from "../core/path-slug";
 import { createNoteDocument, parseNoteDocument } from "../note/document";
 import { createVaultApi } from "./vault";
 
@@ -20,7 +21,7 @@ interface CreateSandboxApiOptions {
 export async function createSandboxApi(options: CreateSandboxApiOptions): Promise<SandboxApi> {
   const root = pathPosix.join(
     options.sandboxRoot,
-    `${sanitizeSegment(options.testName)}-${randomUUID().slice(0, 8)}`,
+    `${sanitizePathSegment(options.testName)}-${randomUUID().slice(0, 8)}`,
   );
   const sandboxPath = (...segments: string[]) => pathPosix.join(root, ...segments);
   const vault = createVaultApi({
@@ -77,14 +78,4 @@ export async function createSandboxApi(options: CreateSandboxApiOptions): Promis
       return document;
     },
   };
-}
-
-function sanitizeSegment(value: string): string {
-  return (
-    value
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-+|-+$/g, "")
-      .slice(0, 80) || "test"
-  );
 }

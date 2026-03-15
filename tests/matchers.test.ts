@@ -1,5 +1,4 @@
 import { promises as fs } from "node:fs";
-import os from "node:os";
 import path from "node:path";
 
 import { afterEach, describe, expect, test } from "vite-plus/test";
@@ -15,16 +14,16 @@ import type {
 } from "../src/core/types";
 import { createSandboxApi } from "../src/vault/sandbox";
 import { createVaultApi } from "../src/vault/vault";
+import {
+  cleanupTempDirectories,
+  createTempDir as createTrackedTempDir,
+} from "./helpers/create-temp-dir";
 import { createStubObsidianClient } from "./helpers/stub-obsidian-client";
 
 const tempDirectories: string[] = [];
 
 afterEach(async () => {
-  await Promise.all(
-    tempDirectories
-      .splice(0)
-      .map((directory) => fs.rm(directory, { force: true, recursive: true })),
-  );
+  await cleanupTempDirectories(tempDirectories);
 });
 
 describe("obsidian-e2e matchers", () => {
@@ -118,9 +117,7 @@ describe("obsidian-e2e matchers", () => {
 });
 
 async function createVaultRoot(): Promise<string> {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "obsidian-e2e-matchers-"));
-  tempDirectories.push(directory);
-  return directory;
+  return createTrackedTempDir(tempDirectories, "obsidian-e2e-matchers-");
 }
 
 function createStubClient(

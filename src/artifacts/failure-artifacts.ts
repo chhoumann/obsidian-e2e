@@ -1,8 +1,8 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-import { buildHarnessCallCode, parseHarnessEnvelope } from "../dev/harness";
 import type { ObsidianClient, PluginHandle } from "../core/types";
+import { sanitizePathSegment } from "../core/path-slug";
 import { parseNoteDocument } from "../note/document";
 import { createVaultApi } from "../vault/vault";
 
@@ -42,25 +42,27 @@ export interface CaptureFailureArtifactsOptions extends FailureArtifactRegistrat
   plugin?: PluginHandle;
 }
 
+const DEFAULT_FAILURE_ARTIFACT_CAPTURE: Required<FailureArtifactOptions> = {
+  activeFile: true,
+  activeNote: true,
+  consoleMessages: true,
+  dom: true,
+  editorText: true,
+  notices: true,
+  parsedFrontmatter: true,
+  runtimeErrors: true,
+  screenshot: true,
+  tabs: true,
+  workspace: true,
+};
+
 export function getFailureArtifactConfig(
   options: FailureArtifactRegistrationOptions,
 ): FailureArtifactConfig {
   if (!options.captureOnFailure) {
     return {
       artifactsDir: path.resolve(options.artifactsDir ?? DEFAULT_FAILURE_ARTIFACTS_DIR),
-      capture: {
-        activeFile: true,
-        activeNote: true,
-        consoleMessages: true,
-        dom: true,
-        editorText: true,
-        notices: true,
-        parsedFrontmatter: true,
-        runtimeErrors: true,
-        screenshot: true,
-        tabs: true,
-        workspace: true,
-      },
+      capture: { ...DEFAULT_FAILURE_ARTIFACT_CAPTURE },
       enabled: false,
     };
   }
@@ -69,19 +71,7 @@ export function getFailureArtifactConfig(
 
   return {
     artifactsDir: path.resolve(options.artifactsDir ?? DEFAULT_FAILURE_ARTIFACTS_DIR),
-    capture: {
-      activeFile: overrides.activeFile ?? true,
-      activeNote: overrides.activeNote ?? true,
-      consoleMessages: overrides.consoleMessages ?? true,
-      dom: overrides.dom ?? true,
-      editorText: overrides.editorText ?? true,
-      notices: overrides.notices ?? true,
-      parsedFrontmatter: overrides.parsedFrontmatter ?? true,
-      runtimeErrors: overrides.runtimeErrors ?? true,
-      screenshot: overrides.screenshot ?? true,
-      tabs: overrides.tabs ?? true,
-      workspace: overrides.workspace ?? true,
-    },
+    capture: { ...DEFAULT_FAILURE_ARTIFACT_CAPTURE, ...overrides },
     enabled: true,
   };
 }
@@ -91,7 +81,7 @@ export function getFailureArtifactDirectory(
   task: FailureArtifactTask,
 ): string {
   const suffix = task.id.split("_").at(-1) ?? "test";
-  return path.join(artifactsDir, `${sanitizeForPath(task.name)}-${suffix}`);
+  return path.join(artifactsDir, `${sanitizePathSegment(task.name, { maxLength: 60 })}-${suffix}`);
 }
 
 export async function captureFailureArtifacts(
@@ -143,9 +133,7 @@ export async function captureFailureArtifacts(
       ),
     ),
     captureJsonArtifact(artifactDirectory, "editor.json", config.capture.editorText, async () => ({
-      text: parseHarnessEnvelope<string | null>(
-        await obsidian.dev.evalRaw(buildHarnessCallCode("editorText")),
-      ),
+      text: await obsidian.dev.editorText(),
     })),
     captureJsonArtifact(
       artifactDirectory,
@@ -273,21 +261,8 @@ function formatArtifactError(error: unknown): string {
   return error instanceof Error ? `${error.name}: ${error.message}\n` : `${String(error)}\n`;
 }
 
-function sanitizeForPath(value: string): string {
-  return (
-    value
-      .trim()
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-+|-+$/g, "")
-      .slice(0, 60) || "test"
-  );
-}
-
 async function readActiveFilePath(obsidian: ObsidianClient): Promise<string | null> {
-  return parseHarnessEnvelope<string | null>(
-    await obsidian.dev.evalRaw(buildHarnessCallCode("activeFilePath")),
-  );
+  return obsidian.dev.activeFilePath();
 }
 
 async function readActiveNoteSnapshot(obsidian: ObsidianClient, activeFile: string) {

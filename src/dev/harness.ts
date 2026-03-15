@@ -9,15 +9,18 @@ import type {
 const HARNESS_NAMESPACE = "__obsidianE2E";
 const HARNESS_VERSION = 1;
 
-type HarnessMethodName =
+export type HarnessMethodName =
+  | "activeFilePath"
+  | "consoleMessages"
   | "diagnostics"
+  | "editorText"
   | "eval"
   | "frontmatter"
   | "metadata"
-  | "activeFilePath"
-  | "editorText"
+  | "notices"
   | "pluginLoaded"
-  | "resetDiagnostics";
+  | "resetDiagnostics"
+  | "runtimeErrors";
 
 interface HarnessEnvelopeSuccess {
   ok: true;
@@ -37,6 +40,47 @@ export function buildHarnessCallCode(method: HarnessMethodName, ...args: unknown
     const __obsidianE2EArgs = ${JSON.stringify(args)};
     const __obsidianE2ENamespace = ${JSON.stringify(HARNESS_NAMESPACE)};
     const __obsidianE2EVersion = ${HARNESS_VERSION};
+${HARNESS_RUNTIME}
+  })()`;
+}
+
+export function parseHarnessEnvelope<T>(raw: string): T {
+  const envelope = JSON.parse(raw.startsWith("=> ") ? raw.slice(3) : raw) as HarnessEnvelope;
+
+  if (!envelope.ok) {
+    throw envelope.error;
+  }
+
+  return decodeHarnessValue(envelope.value) as T;
+}
+
+function decodeHarnessValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((entry) => decodeHarnessValue(entry));
+  }
+
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+
+  if ("__obsidianE2EType" in value && value.__obsidianE2EType === "undefined") {
+    return undefined;
+  }
+
+  return Object.fromEntries(
+    Object.entries(value).map(([key, entry]) => [key, decodeHarnessValue(entry)]),
+  );
+}
+
+export function createDevDiagnostics(value: DevDiagnostics | null | undefined): DevDiagnostics {
+  return {
+    consoleMessages: (value?.consoleMessages ?? []) as DevConsoleMessage[],
+    notices: (value?.notices ?? []) as DevNoticeEvent[],
+    runtimeErrors: (value?.runtimeErrors ?? []) as DevRuntimeError[],
+  };
+}
+
+const HARNESS_RUNTIME = String.raw`
     const __obsidianE2EMaxEntries = 100;
 
     const __obsidianE2EPush = (entries, value) => {
@@ -222,13 +266,21 @@ export function buildHarnessCallCode(method: HarnessMethodName, ...args: unknown
       };
 
       return {
+        activeFilePath() {
+          ensureInstalled();
+          return app?.workspace?.getActiveFile?.()?.path ?? null;
+        },
+        consoleMessages() {
+          ensureInstalled();
+          return state.consoleMessages;
+        },
         diagnostics() {
           ensureInstalled();
-          return {
-            consoleMessages: state.consoleMessages,
-            notices: state.notices,
-            runtimeErrors: state.runtimeErrors,
-          };
+          return state;
+        },
+        editorText() {
+          ensureInstalled();
+          return app?.workspace?.activeLeaf?.view?.editor?.getValue?.() ?? null;
         },
         eval(code) {
           ensureInstalled();
@@ -242,6 +294,10 @@ export function buildHarnessCallCode(method: HarnessMethodName, ...args: unknown
           ensureInstalled();
           return getFileCache(vaultPath);
         },
+        notices() {
+          ensureInstalled();
+          return state.notices;
+        },
         pluginLoaded(pluginId) {
           ensureInstalled();
           const plugins = app?.plugins;
@@ -250,20 +306,16 @@ export function buildHarnessCallCode(method: HarnessMethodName, ...args: unknown
               plugins?.plugins?.[pluginId],
           );
         },
-        activeFilePath() {
-          ensureInstalled();
-          return app?.workspace?.getActiveFile?.()?.path ?? null;
-        },
-        editorText() {
-          ensureInstalled();
-          return app?.workspace?.activeLeaf?.view?.editor?.getValue?.() ?? null;
-        },
         resetDiagnostics() {
           state.consoleMessages.splice(0);
           state.notices.splice(0);
           state.runtimeErrors.splice(0);
           ensureInstalled();
           return true;
+        },
+        runtimeErrors() {
+          ensureInstalled();
+          return state.runtimeErrors;
         },
       };
     };
@@ -293,42 +345,4 @@ export function buildHarnessCallCode(method: HarnessMethodName, ...args: unknown
         },
         ok: false,
       });
-    }
-  })()`;
-}
-
-export function parseHarnessEnvelope<T>(raw: string): T {
-  const envelope = JSON.parse(raw.startsWith("=> ") ? raw.slice(3) : raw) as HarnessEnvelope;
-
-  if (!envelope.ok) {
-    throw envelope.error;
-  }
-
-  return decodeHarnessValue(envelope.value) as T;
-}
-
-function decodeHarnessValue(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    return value.map((entry) => decodeHarnessValue(entry));
-  }
-
-  if (!value || typeof value !== "object") {
-    return value;
-  }
-
-  if ("__obsidianE2EType" in value && value.__obsidianE2EType === "undefined") {
-    return undefined;
-  }
-
-  return Object.fromEntries(
-    Object.entries(value).map(([key, entry]) => [key, decodeHarnessValue(entry)]),
-  );
-}
-
-export function createDevDiagnostics(value: DevDiagnostics | null | undefined): DevDiagnostics {
-  return {
-    consoleMessages: [...(value?.consoleMessages ?? [])] as DevConsoleMessage[],
-    notices: [...(value?.notices ?? [])] as DevNoticeEvent[],
-    runtimeErrors: [...(value?.runtimeErrors ?? [])] as DevRuntimeError[],
-  };
-}
+    }`;

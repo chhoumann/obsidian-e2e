@@ -25,16 +25,11 @@ export function createObsidianMetadataHandle(client: ObsidianClient): ObsidianMe
       predicate?: MetadataPredicate<T>,
       options?: MetadataWaitOptions,
     ) {
-      return waitForMetadataValue(
+      return waitForPresentValue(
         client,
         path,
-        async (value) => {
-          if (value === null) {
-            return false;
-          }
-
-          return (await (predicate?.(value as T) ?? true)) ? (value as T) : false;
-        },
+        () => client.metadata.fileCache<T>(path),
+        predicate,
         "metadata cache",
         options,
       );
@@ -44,18 +39,11 @@ export function createObsidianMetadataHandle(client: ObsidianClient): ObsidianMe
       predicate?: MetadataPredicate<T>,
       options?: MetadataWaitOptions,
     ) {
-      return waitForMetadataValue(
+      return waitForPresentValue(
         client,
         path,
-        async (value) => {
-          const frontmatter = (value as MetadataFileCache<T> | null)?.frontmatter ?? null;
-
-          if (frontmatter === null) {
-            return false;
-          }
-
-          return (await (predicate?.(frontmatter) ?? true)) ? frontmatter : false;
-        },
+        () => client.metadata.frontmatter<T>(path),
+        predicate,
         "frontmatter",
         options,
       );
@@ -65,16 +53,11 @@ export function createObsidianMetadataHandle(client: ObsidianClient): ObsidianMe
       predicate?: MetadataPredicate<T>,
       options?: MetadataWaitOptions,
     ) {
-      return waitForMetadataValue(
+      return waitForPresentValue(
         client,
         path,
-        async (value) => {
-          if (value === null) {
-            return false;
-          }
-
-          return (await (predicate?.(value as T) ?? true)) ? (value as T) : false;
-        },
+        () => client.metadata.fileCache<T>(path),
+        predicate,
         "metadata",
         options,
       );
@@ -93,15 +76,27 @@ async function readMetadata<T>(
   );
 }
 
-async function waitForMetadataValue<T>(
+async function waitForPresentValue<T>(
   client: ObsidianClient,
   path: string,
-  predicate: (value: MetadataFileCache | null) => Promise<T | false> | T | false,
+  readValue: () => Promise<T | null>,
+  predicate: MetadataPredicate<T> | undefined,
   label: string,
   options: MetadataWaitOptions = {},
 ): Promise<T> {
-  return client.waitFor(async () => predicate(await client.metadata.fileCache(path)), {
-    ...options,
-    message: options.message ?? `vault path "${path}" to expose ${label}`,
-  });
+  return client.waitFor(
+    async () => {
+      const value = await readValue();
+
+      if (value === null) {
+        return false;
+      }
+
+      return (await (predicate?.(value) ?? true)) ? value : false;
+    },
+    {
+      ...options,
+      message: options.message ?? `vault path "${path}" to expose ${label}`,
+    },
+  );
 }
