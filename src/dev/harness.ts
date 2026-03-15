@@ -84,10 +84,10 @@ const HARNESS_RUNTIME = String.raw`
     const __obsidianE2EMaxEntries = 100;
 
     const __obsidianE2EPush = (entries, value) => {
-      entries.push(value);
-      if (entries.length > __obsidianE2EMaxEntries) {
-        entries.splice(0, entries.length - __obsidianE2EMaxEntries);
+      if (entries.length >= __obsidianE2EMaxEntries) {
+        entries.shift();
       }
+      entries.push(value);
     };
 
     const __obsidianE2EFormat = (value) => {

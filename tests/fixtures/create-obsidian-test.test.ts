@@ -24,7 +24,7 @@ const fixtureTest = createObsidianTest({
 });
 
 beforeAll(async () => {
-  vaultRoot = await createTempDir([], "obsidian-e2e-fixtures-");
+  vaultRoot = await createTempDir("obsidian-e2e-fixtures-");
 
   await fs.mkdir(path.join(vaultRoot, ".obsidian", "plugins", "quickadd"), {
     recursive: true,

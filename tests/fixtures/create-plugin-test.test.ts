@@ -33,7 +33,7 @@ const pluginTest = createPluginTest({
 });
 
 beforeAll(async () => {
-  vaultRoot = await createTempDir([], "obsidian-e2e-plugin-fixture-");
+  vaultRoot = await createTempDir("obsidian-e2e-plugin-fixture-");
   pluginDataPath = path.join(vaultRoot, ".obsidian", "plugins", "quickadd", "data.json");
   seededNotePath = path.join(vaultRoot, "notes", "seeded.md");
 
