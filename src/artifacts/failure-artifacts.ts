@@ -2,13 +2,21 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import type { ObsidianClient, PluginHandle } from "../core/types";
+import { sanitizePathSegment } from "../core/path-slug";
+import { parseNoteDocument } from "../note/document";
+import { createVaultApi } from "../vault/vault";
 
 export const DEFAULT_FAILURE_ARTIFACTS_DIR = ".obsidian-e2e-artifacts";
 
 export interface FailureArtifactOptions {
   activeFile?: boolean;
+  activeNote?: boolean;
+  consoleMessages?: boolean;
   dom?: boolean;
   editorText?: boolean;
+  notices?: boolean;
+  parsedFrontmatter?: boolean;
+  runtimeErrors?: boolean;
   screenshot?: boolean;
   tabs?: boolean;
   workspace?: boolean;
@@ -34,20 +42,27 @@ export interface CaptureFailureArtifactsOptions extends FailureArtifactRegistrat
   plugin?: PluginHandle;
 }
 
+const DEFAULT_FAILURE_ARTIFACT_CAPTURE: Required<FailureArtifactOptions> = {
+  activeFile: true,
+  activeNote: true,
+  consoleMessages: true,
+  dom: true,
+  editorText: true,
+  notices: true,
+  parsedFrontmatter: true,
+  runtimeErrors: true,
+  screenshot: true,
+  tabs: true,
+  workspace: true,
+};
+
 export function getFailureArtifactConfig(
   options: FailureArtifactRegistrationOptions,
 ): FailureArtifactConfig {
   if (!options.captureOnFailure) {
     return {
       artifactsDir: path.resolve(options.artifactsDir ?? DEFAULT_FAILURE_ARTIFACTS_DIR),
-      capture: {
-        activeFile: true,
-        dom: true,
-        editorText: true,
-        screenshot: true,
-        tabs: true,
-        workspace: true,
-      },
+      capture: { ...DEFAULT_FAILURE_ARTIFACT_CAPTURE },
       enabled: false,
     };
   }
@@ -56,14 +71,7 @@ export function getFailureArtifactConfig(
 
   return {
     artifactsDir: path.resolve(options.artifactsDir ?? DEFAULT_FAILURE_ARTIFACTS_DIR),
-    capture: {
-      activeFile: overrides.activeFile ?? true,
-      dom: overrides.dom ?? true,
-      editorText: overrides.editorText ?? true,
-      screenshot: overrides.screenshot ?? true,
-      tabs: overrides.tabs ?? true,
-      workspace: overrides.workspace ?? true,
-    },
+    capture: { ...DEFAULT_FAILURE_ARTIFACT_CAPTURE, ...overrides },
     enabled: true,
   };
 }
@@ -73,7 +81,7 @@ export function getFailureArtifactDirectory(
   task: FailureArtifactTask,
 ): string {
   const suffix = task.id.split("_").at(-1) ?? "test";
-  return path.join(artifactsDir, `${sanitizeForPath(task.name)}-${suffix}`);
+  return path.join(artifactsDir, `${sanitizePathSegment(task.name, { maxLength: 60 })}-${suffix}`);
 }
 
 export async function captureFailureArtifacts(
@@ -89,6 +97,13 @@ export async function captureFailureArtifacts(
 
   const artifactDirectory = getFailureArtifactDirectory(config.artifactsDir, task);
   await mkdir(artifactDirectory, { recursive: true });
+  const activeFile = readArtifactInput(() => readActiveFilePath(obsidian));
+  const activeNote = readArtifactInput(async () => {
+    const activeFilePath = await unwrapArtifactInput(activeFile);
+
+    return activeFilePath ? readActiveNoteSnapshot(obsidian, activeFilePath) : null;
+  });
+  const diagnostics = await obsidian.dev.diagnostics().catch(() => null);
 
   await Promise.all([
     captureJsonArtifact(
@@ -96,9 +111,21 @@ export async function captureFailureArtifacts(
       "active-file.json",
       config.capture.activeFile,
       async () => ({
-        activeFile: await obsidian.dev.eval<string | null>(
-          "app.workspace.getActiveFile()?.path ?? null",
-        ),
+        activeFile: await unwrapArtifactInput(activeFile),
+      }),
+    ),
+    captureTextArtifact(
+      artifactDirectory,
+      "active-note.md",
+      config.capture.activeNote,
+      async () => (await unwrapArtifactInput(activeNote))?.raw ?? "",
+    ),
+    captureJsonArtifact(
+      artifactDirectory,
+      "active-note-frontmatter.json",
+      config.capture.parsedFrontmatter,
+      async () => ({
+        frontmatter: (await unwrapArtifactInput(activeNote))?.frontmatter ?? null,
       }),
     ),
     captureTextArtifact(artifactDirectory, "dom.txt", config.capture.dom, async () =>
@@ -110,10 +137,26 @@ export async function captureFailureArtifacts(
       ),
     ),
     captureJsonArtifact(artifactDirectory, "editor.json", config.capture.editorText, async () => ({
-      text: await obsidian.dev.eval<string | null>(
-        "app.workspace.activeLeaf?.view?.editor?.getValue?.() ?? null",
-      ),
+      text: await obsidian.dev.editorText(),
     })),
+    captureJsonArtifact(
+      artifactDirectory,
+      "console-messages.json",
+      config.capture.consoleMessages,
+      async () => diagnostics?.consoleMessages ?? [],
+    ),
+    captureJsonArtifact(
+      artifactDirectory,
+      "runtime-errors.json",
+      config.capture.runtimeErrors,
+      async () => diagnostics?.runtimeErrors ?? [],
+    ),
+    captureJsonArtifact(
+      artifactDirectory,
+      "notices.json",
+      config.capture.notices,
+      async () => diagnostics?.notices ?? [],
+    ),
     captureScreenshotArtifact(artifactDirectory, config.capture.screenshot, obsidian),
     captureJsonArtifact(artifactDirectory, "tabs.json", config.capture.tabs, () => obsidian.tabs()),
     captureJsonArtifact(artifactDirectory, "workspace.json", config.capture.workspace, () =>
@@ -222,13 +265,36 @@ function formatArtifactError(error: unknown): string {
   return error instanceof Error ? `${error.name}: ${error.message}\n` : `${String(error)}\n`;
 }
 
-function sanitizeForPath(value: string): string {
-  return (
-    value
-      .trim()
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-+|-+$/g, "")
-      .slice(0, 60) || "test"
-  );
+async function readActiveFilePath(obsidian: ObsidianClient): Promise<string | null> {
+  return obsidian.dev.activeFilePath();
+}
+
+async function readActiveNoteSnapshot(obsidian: ObsidianClient, activeFile: string) {
+  const vault = createVaultApi({ obsidian });
+  const raw = await vault.read(activeFile);
+
+  return parseNoteDocument(raw);
+}
+
+interface ArtifactInputResult<T> {
+  promise: Promise<{ error: unknown; ok: false } | { ok: true; value: T }>;
+}
+
+function readArtifactInput<T>(readValue: () => Promise<T>): ArtifactInputResult<T> {
+  return {
+    promise: readValue().then(
+      (value) => ({ ok: true, value }) as const,
+      (error) => ({ error, ok: false }) as const,
+    ),
+  };
+}
+
+async function unwrapArtifactInput<T>(result: ArtifactInputResult<T>): Promise<T> {
+  const value = await result.promise;
+
+  if (!value.ok) {
+    throw value.error;
+  }
+
+  return value.value;
 }

@@ -1,11 +1,11 @@
 import { promises as fs } from "node:fs";
-import os from "node:os";
 import path from "node:path";
 
 import { afterAll, beforeAll, expect } from "vite-plus/test";
 
 import { createPluginTest } from "../../src/vitest";
 import { createExecResult } from "../helpers/create-exec-result";
+import { createTempDir } from "../helpers/create-temp-dir";
 import type { CommandTransport } from "../../src/core/types";
 
 let pluginDataPath = "";
@@ -18,7 +18,14 @@ const pluginTest = createPluginTest({
   pluginId: "quickadd",
   seedPluginData: { count: 2 },
   seedVault: {
-    "notes/seeded.md": "seeded content",
+    "notes/seeded.md": {
+      note: {
+        body: "seeded content",
+        frontmatter: {
+          tags: ["seeded"],
+        },
+      },
+    },
     "notes/state.json": { json: { ready: true } },
   },
   transport: createTransport(),
@@ -26,7 +33,7 @@ const pluginTest = createPluginTest({
 });
 
 beforeAll(async () => {
-  vaultRoot = await fs.mkdtemp(path.join(os.tmpdir(), "obsidian-e2e-plugin-fixture-"));
+  vaultRoot = await createTempDir("obsidian-e2e-plugin-fixture-");
   pluginDataPath = path.join(vaultRoot, ".obsidian", "plugins", "quickadd", "data.json");
   seededNotePath = path.join(vaultRoot, "notes", "seeded.md");
 
@@ -55,7 +62,9 @@ afterAll(async () => {
 
 pluginTest("injects plugin fixture and restores seeded state", async ({ plugin, vault }) => {
   expect(plugin.id).toBe("quickadd");
-  await expect(vault.read("notes/seeded.md")).resolves.toBe("seeded content");
+  await expect(vault.read("notes/seeded.md")).resolves.toBe(
+    "---\ntags:\n  - seeded\n---\nseeded content",
+  );
   await expect(vault.json<{ ready: boolean }>("notes/state.json").read()).resolves.toEqual({
     ready: true,
   });

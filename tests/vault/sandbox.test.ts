@@ -1,5 +1,4 @@
 import { promises as fs } from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, test } from "vite-plus/test";
 
@@ -7,16 +6,16 @@ import { createSandboxApi } from "../../src/vault/sandbox";
 import { createVaultApi } from "../../src/vault/vault";
 import { waitForValue } from "../../src/core/wait";
 import type { ObsidianClient } from "../../src/core/types";
+import {
+  cleanupTempDirectories,
+  createTempDir as createTrackedTempDir,
+} from "../helpers/create-temp-dir";
 import { createStubObsidianClient } from "../helpers/stub-obsidian-client";
 
 const tempDirectories: string[] = [];
 
 afterEach(async () => {
-  await Promise.all(
-    tempDirectories
-      .splice(0)
-      .map((directory) => fs.rm(directory, { force: true, recursive: true })),
-  );
+  await cleanupTempDirectories(tempDirectories);
 });
 
 describe("createVaultApi", () => {
@@ -117,12 +116,87 @@ describe("createSandboxApi", () => {
 
     await expect(fs.access(path.join(vaultRoot, sandbox.root))).rejects.toThrow();
   });
+
+  test("reads note models and metadata-backed frontmatter", async () => {
+    const vaultRoot = await createVaultRoot();
+    const metadataByPath: Record<string, { frontmatter: { tags: string[] } } | null> = {};
+    const sandbox = await createSandboxApi({
+      obsidian: createStubObsidianClient({
+        metadataByPath,
+        vaultRoot,
+      }),
+      sandboxRoot: "__obsidian_e2e__",
+      testName: "Notes",
+    });
+
+    await sandbox.write("test.md", "---\ntitle: Daily\n---\nBody\n");
+    metadataByPath[sandbox.path("test.md")] = {
+      frontmatter: {
+        tags: ["daily"],
+      },
+    };
+
+    await expect(sandbox.readNote("test.md")).resolves.toEqual({
+      body: "Body\n",
+      frontmatter: {
+        title: "Daily",
+      },
+      raw: "---\ntitle: Daily\n---\nBody\n",
+    });
+    await expect(sandbox.frontmatter("test.md")).resolves.toEqual({
+      tags: ["daily"],
+    });
+  });
+
+  test("writes note documents and waits for metadata by default", async () => {
+    const vaultRoot = await createVaultRoot();
+    const metadataByPath: Record<string, { frontmatter: { title: string } } | null> = {};
+    const sandbox = await createSandboxApi({
+      obsidian: createStubObsidianClient({
+        metadataByPath,
+        vaultRoot,
+        waitFor: (callback, options) => waitForValue(callback, options),
+      }),
+      sandboxRoot: "__obsidian_e2e__",
+      testName: "Notes",
+    });
+
+    metadataByPath[sandbox.path("test.md")] = null;
+    setTimeout(() => {
+      metadataByPath[sandbox.path("test.md")] = {
+        frontmatter: {
+          title: "Daily",
+        },
+      };
+    }, 5);
+
+    await expect(
+      sandbox.writeNote({
+        body: "Body\n",
+        frontmatter: {
+          title: "Daily",
+        },
+        path: "test.md",
+        waitOptions: {
+          intervalMs: 1,
+          timeoutMs: 50,
+        },
+      }),
+    ).resolves.toEqual({
+      body: "Body\n",
+      frontmatter: {
+        title: "Daily",
+      },
+      raw: "---\ntitle: Daily\n---\nBody\n",
+    });
+    await expect(sandbox.waitForFrontmatter("test.md")).resolves.toEqual({
+      title: "Daily",
+    });
+  });
 });
 
 async function createVaultRoot(): Promise<string> {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "obsidian-e2e-vault-"));
-  tempDirectories.push(directory);
-  return directory;
+  return createTrackedTempDir(tempDirectories, "obsidian-e2e-vault-");
 }
 
 function createStubClient(vaultRoot: string): ObsidianClient {

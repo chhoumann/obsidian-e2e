@@ -1,12 +1,11 @@
 import { test as base } from "vite-plus/test";
-import type { TestContext } from "vite-plus/test";
 
 import { getClientInternals } from "../core/internals";
 import type { ObsidianClient, VaultApi } from "../core/types";
+import { createNoteDocument } from "../note/document";
 import { createVaultApi } from "../vault/vault";
 import { resolveFilesystemPath } from "../vault/paths";
 import { createBaseFixtures, type BaseFixtureState } from "./base-fixtures";
-import { registerPluginFailureArtifacts } from "./failure-artifacts";
 import type {
   CreatePluginTestOptions,
   PluginFixtures,
@@ -27,33 +26,15 @@ export function createPluginTest(options: CreatePluginTestOptions): PluginTest {
       },
     }),
     plugin: async (
-      {
-        obsidian,
-        onTestFailed,
-        task,
-      }: Pick<PluginFixtures & TestContext, "obsidian" | "onTestFailed" | "task">,
+      { _testContext }: Pick<BaseFixtureState, "_testContext">,
       use: (plugin: PluginFixtures["plugin"]) => Promise<void>,
     ) => {
-      const plugin = obsidian.plugin(options.pluginId);
-      const wasEnabled = await plugin.isEnabled();
-
-      if (!wasEnabled) {
-        await plugin.enable({ filter: options.pluginFilter });
-      }
-
-      if (options.seedPluginData !== undefined) {
-        await plugin.data().write(options.seedPluginData);
-      }
-
-      registerPluginFailureArtifacts({ onTestFailed, task }, plugin, options);
-
-      try {
-        await use(plugin);
-      } finally {
-        if (!wasEnabled) {
-          await plugin.disable({ filter: options.pluginFilter });
-        }
-      }
+      await use(
+        await _testContext.plugin(options.pluginId, {
+          filter: options.pluginFilter,
+          seedData: options.seedPluginData,
+        }),
+      );
     },
   };
 
@@ -77,6 +58,13 @@ async function writeSeedValue(
 ): Promise<void> {
   if (typeof value === "string") {
     await vault.write(targetPath, value, {
+      waitForContent: true,
+    });
+    return;
+  }
+
+  if ("note" in value) {
+    await vault.write(targetPath, createNoteDocument(value.note).raw, {
       waitForContent: true,
     });
     return;

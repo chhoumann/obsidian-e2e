@@ -1,6 +1,7 @@
 import { describe, expect, test, vi } from "vite-plus/test";
 
 import { createObsidianClient } from "../../src/core/client";
+import { DevEvalError } from "../../src/core/errors";
 import { mergeExecOptions } from "../../src/core/exec-options";
 import type { CommandTransport } from "../../src/core/types";
 
@@ -378,15 +379,59 @@ describe("createObsidianClient", () => {
     expect(commandsAttempts).toBeGreaterThan(1);
   });
 
-  test("exposes developer eval, dom, and screenshot helpers", async () => {
+  test("exposes developer eval, evalRaw, metadata, diagnostics, and screenshot helpers", async () => {
     const transport = vi.fn<CommandTransport>().mockImplementation(async (request) => {
       if (request.argv[1] === "eval") {
+        const code = request.argv.find((entry) => entry.startsWith("code=")) ?? "";
+
+        if (code.includes('const __obsidianE2EMethod = "eval"')) {
+          return {
+            argv: request.argv,
+            command: request.bin,
+            exitCode: 0,
+            stderr: "",
+            stdout:
+              '{"ok":true,"value":{"activeFile":"Inbox/Today.md","values":[1,{"nested":"ok"}]}}\n',
+          };
+        }
+
+        if (code.includes('const __obsidianE2EMethod = "metadata"')) {
+          return {
+            argv: request.argv,
+            command: request.bin,
+            exitCode: 0,
+            stderr: "",
+            stdout: '{"ok":true,"value":{"frontmatter":{"tags":["daily"]},"headings":[]}}\n',
+          };
+        }
+
+        if (code.includes('const __obsidianE2EMethod = "diagnostics"')) {
+          return {
+            argv: request.argv,
+            command: request.bin,
+            exitCode: 0,
+            stderr: "",
+            stdout:
+              '{"ok":true,"value":{"consoleMessages":[{"args":["hello"],"at":1,"level":"log","text":"hello"}],"notices":[{"at":2,"message":"Saved"}],"runtimeErrors":[{"at":3,"message":"boom","source":"error"}]}}\n',
+          };
+        }
+
+        if (code.includes('const __obsidianE2EMethod = "resetDiagnostics"')) {
+          return {
+            argv: request.argv,
+            command: request.bin,
+            exitCode: 0,
+            stderr: "",
+            stdout: '{"ok":true,"value":true}\n',
+          };
+        }
+
         return {
           argv: request.argv,
           command: request.bin,
           exitCode: 0,
           stderr: "",
-          stdout: '=> {"activeFile":"Inbox/Today.md"}\n',
+          stdout: "raw\n",
         };
       }
 
@@ -428,14 +473,56 @@ describe("createObsidianClient", () => {
       vault: "dev",
     });
 
-    await expect(client.dev.eval<{ activeFile: string }>("code")).resolves.toEqual({
+    await expect(
+      client.dev.eval<{ activeFile: string; values: unknown[] }>("code"),
+    ).resolves.toEqual({
       activeFile: "Inbox/Today.md",
+      values: [1, { nested: "ok" }],
     });
+    await expect(client.dev.evalRaw("code")).resolves.toBe("raw");
+    await expect(client.metadata.fileCache("Inbox/Today.md")).resolves.toEqual({
+      frontmatter: {
+        tags: ["daily"],
+      },
+      headings: [],
+    });
+    await expect(client.dev.diagnostics()).resolves.toEqual({
+      consoleMessages: [{ args: ["hello"], at: 1, level: "log", text: "hello" }],
+      notices: [{ at: 2, message: "Saved" }],
+      runtimeErrors: [{ at: 3, message: "boom", source: "error" }],
+    });
+    await expect(client.dev.resetDiagnostics()).resolves.toBeUndefined();
     await expect(
       client.dev.dom({ all: true, selector: ".workspace-tab-header-inner-title", text: true }),
     ).resolves.toEqual(["Files", "Search", "Bookmarks"]);
     await expect(client.dev.dom({ selector: ".workspace-tab", total: true })).resolves.toBe(3);
     await expect(client.dev.screenshot("/tmp/shot.png")).resolves.toBe("/tmp/shot.png");
+  });
+
+  test("raises remote eval failures with remote stack details", async () => {
+    const transport = vi.fn<CommandTransport>().mockResolvedValue({
+      argv: ["vault=dev", "eval"],
+      command: "obsidian",
+      exitCode: 0,
+      stderr: "",
+      stdout:
+        '{"ok":false,"error":{"name":"TypeError","message":"Nope","stack":"TypeError: Nope\\n    at eval"}}\n',
+    });
+
+    const client = createObsidianClient({
+      transport,
+      vault: "dev",
+    });
+
+    await expect(client.dev.eval("broken()")).rejects.toBeInstanceOf(DevEvalError);
+    await expect(client.dev.eval("broken()")).rejects.toMatchObject({
+      message: expect.stringContaining("Nope"),
+      remote: {
+        message: "Nope",
+        name: "TypeError",
+        stack: "TypeError: Nope\n    at eval",
+      },
+    });
   });
 
   test("provides a first-class sleep helper", async () => {
@@ -451,6 +538,103 @@ describe("createObsidianClient", () => {
     });
 
     await expect(client.sleep(5)).resolves.toBeUndefined();
+  });
+
+  test("waits for active files and harness diagnostics", async () => {
+    let activeFileAttempts = 0;
+    let consoleAttempts = 0;
+    let noticeAttempts = 0;
+    let runtimeErrorAttempts = 0;
+
+    const transport = vi.fn<CommandTransport>().mockImplementation(async (request) => {
+      if (request.argv[1] !== "eval") {
+        throw new Error(`Unhandled request: ${request.argv.join(" ")}`);
+      }
+
+      const code = request.argv.find((entry) => entry.startsWith("code=")) ?? "";
+
+      if (code.includes('const __obsidianE2EMethod = "activeFilePath"')) {
+        activeFileAttempts += 1;
+        return {
+          argv: request.argv,
+          command: request.bin,
+          exitCode: 0,
+          stderr: "",
+          stdout: JSON.stringify({
+            ok: true,
+            value: activeFileAttempts > 1 ? "Inbox/Today.md" : "Inbox/Pending.md",
+          }),
+        };
+      }
+
+      if (code.includes('const __obsidianE2EMethod = "consoleMessages"')) {
+        consoleAttempts += 1;
+        return {
+          argv: request.argv,
+          command: request.bin,
+          exitCode: 0,
+          stderr: "",
+          stdout: JSON.stringify({
+            ok: true,
+            value: consoleAttempts > 1 ? [{ args: [], at: 1, level: "log", text: "done" }] : [],
+          }),
+        };
+      }
+
+      if (code.includes('const __obsidianE2EMethod = "notices"')) {
+        noticeAttempts += 1;
+        return {
+          argv: request.argv,
+          command: request.bin,
+          exitCode: 0,
+          stderr: "",
+          stdout: JSON.stringify({
+            ok: true,
+            value: noticeAttempts > 1 ? [{ at: 2, message: "Saved" }] : [],
+          }),
+        };
+      }
+
+      if (code.includes('const __obsidianE2EMethod = "runtimeErrors"')) {
+        runtimeErrorAttempts += 1;
+        return {
+          argv: request.argv,
+          command: request.bin,
+          exitCode: 0,
+          stderr: "",
+          stdout: JSON.stringify({
+            ok: true,
+            value: runtimeErrorAttempts > 1 ? [{ at: 3, message: "boom", source: "error" }] : [],
+          }),
+        };
+      }
+
+      throw new Error(`Unhandled eval request: ${request.argv.join(" ")}`);
+    });
+
+    const client = createObsidianClient({
+      intervalMs: 1,
+      timeoutMs: 50,
+      transport,
+      vault: "dev",
+    });
+
+    await expect(client.waitForActiveFile("Inbox/Today.md")).resolves.toBe("Inbox/Today.md");
+    await expect(client.waitForConsoleMessage((entry) => entry.text === "done")).resolves.toEqual({
+      args: [],
+      at: 1,
+      level: "log",
+      text: "done",
+    });
+    await expect(client.waitForNotice("Saved")).resolves.toEqual({
+      at: 2,
+      message: "Saved",
+    });
+    await expect(client.waitForRuntimeError("boom")).resolves.toEqual({
+      at: 3,
+      message: "boom",
+      source: "error",
+    });
   });
 
   test("exports a reusable exec option merge helper", () => {

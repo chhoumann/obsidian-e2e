@@ -1,9 +1,12 @@
 import { promises as fs } from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { createObsidianClient } from "../../src/core/client";
 import { sleep, waitForValue } from "../../src/core/wait";
+import {
+  cleanupTempDirectories,
+  createTempDir as createTrackedTempDir,
+} from "../helpers/create-temp-dir";
 import { createStubObsidianClient } from "../helpers/stub-obsidian-client";
 import { createExecResult } from "../helpers/create-exec-result";
 import type { CommandTransport } from "../../src/core/types";
@@ -11,11 +14,7 @@ import type { CommandTransport } from "../../src/core/types";
 const tempDirectories: string[] = [];
 
 afterEach(async () => {
-  await Promise.all(
-    tempDirectories
-      .splice(0)
-      .map((directory) => fs.rm(directory, { force: true, recursive: true })),
-  );
+  await cleanupTempDirectories(tempDirectories);
 });
 
 describe("plugin data restore", () => {
@@ -77,7 +76,11 @@ describe("plugin readiness helpers", () => {
 
       if (command === "eval") {
         readyAttempts += 1;
-        return createExecResult(request.bin, request.argv, `=> ${readyAttempts > 1}\n`);
+        return createExecResult(
+          request.bin,
+          request.argv,
+          `${JSON.stringify({ ok: true, value: readyAttempts > 1 })}\n`,
+        );
       }
 
       if (command === "plugin:reload") {
@@ -147,10 +150,253 @@ describe("plugin readiness helpers", () => {
   });
 });
 
+describe("plugin data ergonomics", () => {
+  test("updateDataAndReload reloads enabled plugins and waits by default", async () => {
+    const vaultRoot = await createVaultRoot();
+    const pluginDataPath = path.join(vaultRoot, ".obsidian", "plugins", "quickadd", "data.json");
+    await fs.mkdir(path.dirname(pluginDataPath), { recursive: true });
+    await fs.writeFile(pluginDataPath, '{\n  "count": 1\n}\n', "utf8");
+
+    const transport = vi.fn<CommandTransport>().mockImplementation(async (request) => {
+      if (request.argv[0] === "--help") {
+        return createExecResult(request.bin, request.argv, "usage\n");
+      }
+
+      const [, command, ...rest] = request.argv;
+      const args = Object.fromEntries(
+        rest
+          .filter((entry) => entry.includes("="))
+          .map((entry) => {
+            const [key, ...value] = entry.split("=");
+            return [key, value.join("=")];
+          }),
+      );
+
+      if (command === "vault" && args.info === "path") {
+        return createExecResult(request.bin, request.argv, `${vaultRoot}\n`);
+      }
+
+      if (command === "plugin") {
+        return createExecResult(request.bin, request.argv, "enabled\ttrue\n");
+      }
+
+      if (command === "plugin:reload") {
+        return createExecResult(request.bin, request.argv, "");
+      }
+
+      if (command === "eval") {
+        return createExecResult(
+          request.bin,
+          request.argv,
+          `${JSON.stringify({ ok: true, value: true })}\n`,
+        );
+      }
+
+      throw new Error(`Unhandled transport request: ${request.argv.join(" ")}`);
+    });
+
+    const client = createObsidianClient({
+      transport,
+      vault: "dev",
+    });
+    const plugin = client.plugin("quickadd");
+
+    await expect(
+      plugin.updateDataAndReload<{ count: number }>((draft) => {
+        draft.count += 1;
+      }),
+    ).resolves.toEqual({ count: 2 });
+    await expect(plugin.data<{ count: number }>().read()).resolves.toEqual({ count: 2 });
+
+    expect(transport).toHaveBeenCalledWith(
+      expect.objectContaining({
+        argv: ["vault=dev", "plugin:reload", "id=quickadd"],
+      }),
+    );
+    expect(transport.mock.calls.some((call) => call[0].argv[1] === "eval")).toBe(true);
+  });
+
+  test("updateDataAndReload patches data without reloading disabled plugins", async () => {
+    const vaultRoot = await createVaultRoot();
+    const pluginDataPath = path.join(vaultRoot, ".obsidian", "plugins", "quickadd", "data.json");
+    await fs.mkdir(path.dirname(pluginDataPath), { recursive: true });
+    await fs.writeFile(pluginDataPath, '{\n  "enabled": false\n}\n', "utf8");
+
+    const client = createFakeClient(vaultRoot);
+    const plugin = client.plugin("quickadd");
+
+    await expect(
+      plugin.updateDataAndReload<{ enabled: boolean }>((draft) => {
+        draft.enabled = true;
+      }),
+    ).resolves.toEqual({ enabled: true });
+    await expect(plugin.data<{ enabled: boolean }>().read()).resolves.toEqual({ enabled: true });
+  });
+
+  test("withPatchedData restores original data even when the callback fails", async () => {
+    const vaultRoot = await createVaultRoot();
+    const pluginDataPath = path.join(vaultRoot, ".obsidian", "plugins", "quickadd", "data.json");
+    await fs.mkdir(path.dirname(pluginDataPath), { recursive: true });
+    await fs.writeFile(pluginDataPath, '{\n  "count": 1\n}\n', "utf8");
+
+    const client = createFakeClient(vaultRoot);
+    const plugin = client.plugin("quickadd");
+
+    await expect(
+      plugin.withPatchedData<{ count: number }>(
+        (draft) => {
+          draft.count = 9;
+        },
+        async () => {
+          throw new Error("boom");
+        },
+      ),
+    ).rejects.toThrow("boom");
+
+    await expect(plugin.data<{ count: number }>().read()).resolves.toEqual({ count: 1 });
+  });
+
+  test("withPatchedData reloads enabled plugins when patching and restoring", async () => {
+    const vaultRoot = await createVaultRoot();
+    const pluginDataPath = path.join(vaultRoot, ".obsidian", "plugins", "quickadd", "data.json");
+    await fs.mkdir(path.dirname(pluginDataPath), { recursive: true });
+    await fs.writeFile(pluginDataPath, '{\n  "count": 1\n}\n', "utf8");
+
+    const transport = vi.fn<CommandTransport>().mockImplementation(async (request) => {
+      if (request.argv[0] === "--help") {
+        return createExecResult(request.bin, request.argv, "usage\n");
+      }
+
+      const [, command, ...rest] = request.argv;
+      const args = Object.fromEntries(
+        rest
+          .filter((entry) => entry.includes("="))
+          .map((entry) => {
+            const [key, ...value] = entry.split("=");
+            return [key, value.join("=")];
+          }),
+      );
+
+      if (command === "vault" && args.info === "path") {
+        return createExecResult(request.bin, request.argv, `${vaultRoot}\n`);
+      }
+
+      if (command === "plugin") {
+        return createExecResult(request.bin, request.argv, "enabled\ttrue\n");
+      }
+
+      if (command === "plugin:reload") {
+        return createExecResult(request.bin, request.argv, "");
+      }
+
+      if (command === "eval") {
+        return createExecResult(
+          request.bin,
+          request.argv,
+          `${JSON.stringify({ ok: true, value: true })}\n`,
+        );
+      }
+
+      throw new Error(`Unhandled transport request: ${request.argv.join(" ")}`);
+    });
+
+    const client = createObsidianClient({
+      transport,
+      vault: "dev",
+    });
+    const plugin = client.plugin("quickadd");
+
+    await expect(
+      plugin.withPatchedData<{ count: number }, number>(
+        (draft) => {
+          draft.count = 3;
+        },
+        async () => {
+          await expect(plugin.data<{ count: number }>().read()).resolves.toEqual({ count: 3 });
+          return 3;
+        },
+      ),
+    ).resolves.toBe(3);
+
+    await expect(plugin.data<{ count: number }>().read()).resolves.toEqual({ count: 1 });
+
+    const reloadCalls = transport.mock.calls.filter((call) => call[0].argv[1] === "plugin:reload");
+    expect(reloadCalls).toHaveLength(2);
+  });
+
+  test("withPatchedData restores original data when reload after patching fails", async () => {
+    const vaultRoot = await createVaultRoot();
+    const pluginDataPath = path.join(vaultRoot, ".obsidian", "plugins", "quickadd", "data.json");
+    await fs.mkdir(path.dirname(pluginDataPath), { recursive: true });
+    await fs.writeFile(pluginDataPath, '{\n  "count": 1\n}\n', "utf8");
+    let reloadAttempts = 0;
+
+    const transport = vi.fn<CommandTransport>().mockImplementation(async (request) => {
+      if (request.argv[0] === "--help") {
+        return createExecResult(request.bin, request.argv, "usage\n");
+      }
+
+      const [, command, ...rest] = request.argv;
+      const args = Object.fromEntries(
+        rest
+          .filter((entry) => entry.includes("="))
+          .map((entry) => {
+            const [key, ...value] = entry.split("=");
+            return [key, value.join("=")];
+          }),
+      );
+
+      if (command === "vault" && args.info === "path") {
+        return createExecResult(request.bin, request.argv, `${vaultRoot}\n`);
+      }
+
+      if (command === "plugin") {
+        return createExecResult(request.bin, request.argv, "enabled\ttrue\n");
+      }
+
+      if (command === "plugin:reload") {
+        reloadAttempts += 1;
+
+        if (reloadAttempts === 1) {
+          throw new Error("reload failed");
+        }
+
+        return createExecResult(request.bin, request.argv, "");
+      }
+
+      if (command === "eval") {
+        return createExecResult(
+          request.bin,
+          request.argv,
+          `${JSON.stringify({ ok: true, value: true })}\n`,
+        );
+      }
+
+      throw new Error(`Unhandled transport request: ${request.argv.join(" ")}`);
+    });
+
+    const client = createObsidianClient({
+      transport,
+      vault: "dev",
+    });
+    const plugin = client.plugin("quickadd");
+
+    await expect(
+      plugin.withPatchedData<{ count: number }, number>(
+        (draft) => {
+          draft.count = 3;
+        },
+        async () => 3,
+      ),
+    ).rejects.toThrow("reload failed");
+
+    await expect(plugin.data<{ count: number }>().read()).resolves.toEqual({ count: 1 });
+    expect(reloadAttempts).toBe(2);
+  });
+});
+
 async function createVaultRoot(): Promise<string> {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "obsidian-e2e-plugin-"));
-  tempDirectories.push(directory);
-  return directory;
+  return createTrackedTempDir(tempDirectories, "obsidian-e2e-plugin-");
 }
 
 function createFakeClient(vaultRoot: string) {

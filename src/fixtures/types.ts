@@ -1,6 +1,7 @@
-import type { FailureArtifactOptions } from "../artifacts/failure-artifacts";
+import type { FailureArtifactOptions, FailureArtifactTask } from "../artifacts/failure-artifacts";
 import type {
   CreateObsidianClientOptions,
+  NoteInput,
   ObsidianClient,
   PluginHandle,
   PluginToggleOptions,
@@ -24,9 +25,29 @@ export interface CreateObsidianTestOptions extends CreateObsidianClientOptions {
   sandboxRoot?: string;
 }
 
-export type VaultSeedEntry = string | { json: unknown };
+export type VaultSeedEntry = string | { json: unknown } | { note: NoteInput };
 
 export type VaultSeed = Record<string, VaultSeedEntry>;
+
+export interface PluginSessionOptions {
+  filter?: PluginToggleOptions["filter"];
+  seedData?: unknown;
+}
+
+export interface TestContextCleanupOptions {
+  failedTask?: FailureArtifactTask;
+}
+
+export interface TestContext {
+  obsidian: ObsidianClient;
+  sandbox: SandboxApi;
+  vault: VaultApi;
+
+  captureFailureArtifacts(task: FailureArtifactTask): Promise<string | undefined>;
+  cleanup(options?: TestContextCleanupOptions): Promise<void>;
+  plugin(id: string, options?: PluginSessionOptions): Promise<PluginHandle>;
+  resetDiagnostics(): Promise<void>;
+}
 
 export interface CreatePluginTestOptions extends CreateObsidianTestOptions {
   pluginFilter?: PluginToggleOptions["filter"];

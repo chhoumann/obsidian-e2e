@@ -1,5 +1,76 @@
 export type ObsidianArg = boolean | number | string | null | undefined;
 
+export type FrontmatterValue =
+  | boolean
+  | number
+  | string
+  | null
+  | FrontmatterValue[]
+  | { [key: string]: FrontmatterValue };
+
+export interface NoteFrontmatter {
+  [key: string]: FrontmatterValue;
+}
+
+export interface NoteDocument<
+  TFrontmatter extends NoteFrontmatter | null = NoteFrontmatter | null,
+> {
+  body: string;
+  frontmatter: TFrontmatter;
+  raw: string;
+}
+
+export interface NoteInput<TFrontmatter extends NoteFrontmatter | null = NoteFrontmatter | null> {
+  body?: string;
+  frontmatter?: TFrontmatter;
+}
+
+export interface NoteMatcherOptions<
+  TFrontmatter extends NoteFrontmatter | null = NoteFrontmatter | null,
+> {
+  body?: string;
+  bodyIncludes?: string;
+  frontmatter?: TFrontmatter;
+}
+
+export interface MetadataFileCache<
+  TFrontmatter extends NoteFrontmatter | null = NoteFrontmatter | null,
+> extends Record<string, unknown> {
+  frontmatter?: TFrontmatter;
+}
+
+export interface DevEvalErrorPayload {
+  message: string;
+  name: string;
+  stack?: string;
+}
+
+export interface DevConsoleMessage {
+  args: unknown[];
+  at: number;
+  level: string;
+  text: string;
+}
+
+export interface DevRuntimeError {
+  at: number;
+  message: string;
+  source: "error" | "unhandledrejection";
+  stack?: string;
+}
+
+export interface DevNoticeEvent {
+  at: number;
+  message: string;
+  timeout?: number;
+}
+
+export interface DevDiagnostics {
+  consoleMessages: DevConsoleMessage[];
+  notices: DevNoticeEvent[];
+  runtimeErrors: DevRuntimeError[];
+}
+
 export interface ExecOptions {
   allowNonZeroExit?: boolean;
   cwd?: string;
@@ -16,6 +87,20 @@ export interface VaultWriteOptions {
   waitOptions?: VaultWaitForContentOptions;
 }
 
+export type MetadataPredicate<T = MetadataFileCache> = (metadata: T) => boolean | Promise<boolean>;
+
+export type MetadataWaitOptions = WaitForOptions;
+
+export interface SandboxWriteNoteOptions<
+  TFrontmatter extends NoteFrontmatter | null = NoteFrontmatter | null,
+> extends NoteInput<TFrontmatter> {
+  path: string;
+  waitForMetadata?:
+    | boolean
+    | MetadataPredicate<MetadataFileCache<Extract<TFrontmatter, NoteFrontmatter> | null>>;
+  waitOptions?: MetadataWaitOptions;
+}
+
 export type PluginDataPredicate<T = unknown> = (data: T) => boolean | Promise<boolean>;
 
 export type PluginWaitForDataOptions = WaitForOptions;
@@ -28,6 +113,14 @@ export interface PluginReloadOptions extends ExecOptions {
   readyOptions?: PluginWaitUntilReadyOptions;
   waitUntilReady?: boolean;
 }
+
+export interface PluginPatchDataOptions<T> extends PluginReloadOptions {
+  patch?: JsonFileUpdater<T>;
+}
+
+export type PluginUpdateDataOptions<T> = PluginPatchDataOptions<T>;
+
+export type PluginWithPatchedDataOptions<T> = PluginPatchDataOptions<T>;
 
 export interface ExecResult {
   argv: string[];
@@ -101,6 +194,15 @@ export interface PluginHandle {
   isEnabled(): Promise<boolean>;
   reload(options?: PluginReloadOptions): Promise<void>;
   restoreData(): Promise<void>;
+  updateDataAndReload<T = unknown>(
+    updater: JsonFileUpdater<T>,
+    options?: PluginUpdateDataOptions<T>,
+  ): Promise<T>;
+  withPatchedData<T = unknown, TResult = void>(
+    updater: JsonFileUpdater<T>,
+    run: (plugin: PluginHandle) => Promise<TResult> | TResult,
+    options?: PluginWithPatchedDataOptions<T>,
+  ): Promise<TResult>;
   waitForData<T = unknown>(
     predicate: PluginDataPredicate<T>,
     options?: PluginWaitForDataOptions,
@@ -123,9 +225,40 @@ export interface ObsidianCommandHandle {
 }
 
 export interface ObsidianDevHandle {
+  activeFilePath(execOptions?: ExecOptions): Promise<string | null>;
+  consoleMessages(execOptions?: ExecOptions): Promise<DevConsoleMessage[]>;
+  diagnostics(execOptions?: ExecOptions): Promise<DevDiagnostics>;
   dom(options: DevDomQueryOptions, execOptions?: ExecOptions): Promise<DevDomResult>;
+  editorText(execOptions?: ExecOptions): Promise<string | null>;
   eval<T = unknown>(code: string, options?: ExecOptions): Promise<T>;
+  evalRaw(code: string, options?: ExecOptions): Promise<string>;
+  notices(execOptions?: ExecOptions): Promise<DevNoticeEvent[]>;
+  resetDiagnostics(execOptions?: ExecOptions): Promise<void>;
+  runtimeErrors(execOptions?: ExecOptions): Promise<DevRuntimeError[]>;
   screenshot(path: string, options?: ExecOptions): Promise<string>;
+}
+
+export interface ObsidianMetadataHandle {
+  fileCache<T = MetadataFileCache>(path: string, execOptions?: ExecOptions): Promise<T | null>;
+  frontmatter<T extends NoteFrontmatter = NoteFrontmatter>(
+    path: string,
+    execOptions?: ExecOptions,
+  ): Promise<T | null>;
+  waitForFileCache<T = MetadataFileCache>(
+    path: string,
+    predicate?: MetadataPredicate<T>,
+    options?: MetadataWaitOptions,
+  ): Promise<T>;
+  waitForFrontmatter<T extends NoteFrontmatter = NoteFrontmatter>(
+    path: string,
+    predicate?: MetadataPredicate<T>,
+    options?: MetadataWaitOptions,
+  ): Promise<T>;
+  waitForMetadata<T = MetadataFileCache>(
+    path: string,
+    predicate?: MetadataPredicate<T>,
+    options?: MetadataWaitOptions,
+  ): Promise<T>;
 }
 
 export type DevDomResult = number | string | string[];
@@ -158,6 +291,7 @@ export interface ObsidianClient {
   readonly app: ObsidianAppHandle;
   readonly bin: string;
   readonly dev: ObsidianDevHandle;
+  readonly metadata: ObsidianMetadataHandle;
   readonly vaultName: string;
 
   command(id: string): ObsidianCommandHandle;
@@ -184,6 +318,19 @@ export interface ObsidianClient {
   tabs(options?: TabsOptions, execOptions?: ExecOptions): Promise<WorkspaceTab[]>;
   vaultPath(): Promise<string>;
   verify(): Promise<void>;
+  waitForActiveFile(path: string, options?: WaitForOptions): Promise<string>;
+  waitForConsoleMessage(
+    predicate: (message: DevConsoleMessage) => boolean | Promise<boolean>,
+    options?: WaitForOptions,
+  ): Promise<DevConsoleMessage>;
+  waitForNotice(
+    predicate: string | ((notice: DevNoticeEvent) => boolean | Promise<boolean>),
+    options?: WaitForOptions,
+  ): Promise<DevNoticeEvent>;
+  waitForRuntimeError(
+    predicate: string | ((error: DevRuntimeError) => boolean | Promise<boolean>),
+    options?: WaitForOptions,
+  ): Promise<DevRuntimeError>;
   waitFor<T>(
     fn: () => Promise<T | false | null | undefined> | T | false | null | undefined,
     options?: WaitForOptions,
@@ -224,5 +371,22 @@ export interface SandboxApi extends VaultApi {
   readonly root: string;
 
   cleanup(): Promise<void>;
+  frontmatter<T extends NoteFrontmatter = NoteFrontmatter>(path: string): Promise<T | null>;
   path(...segments: string[]): string;
+  readNote<TFrontmatter extends NoteFrontmatter | null = NoteFrontmatter | null>(
+    path: string,
+  ): Promise<NoteDocument<TFrontmatter>>;
+  waitForFrontmatter<T extends NoteFrontmatter = NoteFrontmatter>(
+    path: string,
+    predicate?: MetadataPredicate<T>,
+    options?: MetadataWaitOptions,
+  ): Promise<T>;
+  waitForMetadata<T = MetadataFileCache>(
+    path: string,
+    predicate?: MetadataPredicate<T>,
+    options?: MetadataWaitOptions,
+  ): Promise<T>;
+  writeNote<TFrontmatter extends NoteFrontmatter | null = NoteFrontmatter | null>(
+    options: SandboxWriteNoteOptions<TFrontmatter>,
+  ): Promise<NoteDocument<TFrontmatter>>;
 }

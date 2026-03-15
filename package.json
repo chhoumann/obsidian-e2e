@@ -47,6 +47,9 @@
     "version-packages": "changeset version",
     "prepublishOnly": "vp pack"
   },
+  "dependencies": {
+    "yaml": "^2.8.2"
+  },
   "devDependencies": {
     "@changesets/cli": "^2.30.0",
     "@types/node": "^25.3.5",
