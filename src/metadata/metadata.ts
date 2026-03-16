@@ -1,4 +1,3 @@
-import { buildHarnessCallCode, parseHarnessEnvelope } from "../dev/harness";
 import type {
   ExecOptions,
   MetadataFileCache,
@@ -8,6 +7,7 @@ import type {
   ObsidianClient,
   ObsidianMetadataHandle,
 } from "../core/types";
+import { runEvalJson } from "../dev/eval-json";
 
 export function createObsidianMetadataHandle(client: ObsidianClient): ObsidianMetadataHandle {
   return {
@@ -71,9 +71,20 @@ async function readMetadata<T>(
   path: string,
   execOptions?: ExecOptions,
 ): Promise<T> {
-  return parseHarnessEnvelope<T>(
-    await client.dev.evalRaw(buildHarnessCallCode(method, path), execOptions),
-  );
+  return runEvalJson<T>(client.dev, buildMetadataReadCode(method, path), execOptions);
+}
+
+function buildMetadataReadCode(method: "frontmatter" | "metadata", path: string): string {
+  return [
+    "(()=>{",
+    `const __obsidianE2EPath=${JSON.stringify(path)};`,
+    "const __obsidianE2EFile=app?.vault?.getAbstractFileByPath?.(__obsidianE2EPath);",
+    "if(!__obsidianE2EFile){return null;}",
+    method === "frontmatter"
+      ? "return app?.metadataCache?.getFileCache?.(__obsidianE2EFile)?.frontmatter ?? null;"
+      : "return app?.metadataCache?.getFileCache?.(__obsidianE2EFile) ?? null;",
+    "})()",
+  ].join("");
 }
 
 async function waitForPresentValue<T>(

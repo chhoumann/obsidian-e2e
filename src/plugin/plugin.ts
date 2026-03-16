@@ -1,6 +1,5 @@
 import path from "node:path";
 
-import { buildHarnessCallCode, parseHarnessEnvelope } from "../dev/harness";
 import { getClientInternals } from "../core/internals";
 import type {
   JsonFile,
@@ -15,6 +14,7 @@ import type {
   PluginWaitForDataOptions,
   PluginWaitUntilReadyOptions,
 } from "../core/types";
+import { runEvalJson } from "../dev/eval-json";
 import { createJsonFile } from "../vault/json-file";
 
 export function createPluginHandle(client: ObsidianClient, id: string): PluginHandle {
@@ -25,9 +25,7 @@ export function createPluginHandle(client: ObsidianClient, id: string): PluginHa
 
   async function isLoadedInApp(): Promise<boolean> {
     try {
-      return parseHarnessEnvelope<boolean>(
-        await client.dev.evalRaw(buildHarnessCallCode("pluginLoaded", id)),
-      );
+      return await runEvalJson<boolean>(client.dev, buildPluginLoadedCode(id));
     } catch {
       return false;
     }
@@ -196,4 +194,13 @@ export function createPluginHandle(client: ObsidianClient, id: string): PluginHa
       );
     },
   };
+}
+
+function buildPluginLoadedCode(id: string): string {
+  return [
+    "(()=>{",
+    "const __obsidianE2EPlugins=app?.plugins;",
+    `return Boolean(__obsidianE2EPlugins?.enabledPlugins?.has?.(${JSON.stringify(id)})&&__obsidianE2EPlugins?.plugins?.[${JSON.stringify(id)}]);`,
+    "})()",
+  ].join("");
 }

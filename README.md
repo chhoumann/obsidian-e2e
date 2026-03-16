@@ -237,8 +237,7 @@ Fixture summary:
 - `sandbox`
   - a per-test disposable directory under `sandboxRoot`; automatically cleaned
     up after each test
-  - exposes note helpers such as `writeNote()`, `readNote()`, `frontmatter()`,
-    `waitForFrontmatter()`, and `waitForMetadata()`
+  - exposes note helpers such as `writeNote()`, `readNote()`, and `path()`
 
 Plugin data mutations are snapshotted on first write and restored automatically
 after each test. Sandbox files are also cleaned up automatically.
@@ -266,14 +265,14 @@ await expect(sandbox.readNote("Inbox/Today.md")).resolves.toMatchObject({
   },
 });
 
-await sandbox.waitForFrontmatter("Inbox/Today.md", (frontmatter) =>
+await obsidian.metadata.waitForFrontmatter(sandbox.path("Inbox/Today.md"), (frontmatter) =>
   frontmatter.tags.includes("daily"),
 );
 ```
 
-`readNote()` is file-derived. `sandbox.frontmatter()` and
-`sandbox.waitForMetadata()` are Obsidian metadata-cache reads, so tests can
-distinguish raw file content from “Obsidian has indexed this note”.
+`readNote()` is file-derived. Metadata-cache reads stay under
+`obsidian.metadata.*`, so tests can distinguish raw file content from
+“Obsidian has indexed this note”.
 
 Outside Vitest fixtures, use the public lifecycle wrapper:
 
@@ -559,6 +558,7 @@ to the real `obsidian` CLI:
 - `obsidian.command(id).run()`
 - `obsidian.dev.dom({ ... })`
 - `obsidian.dev.eval(code)`
+- `obsidian.dev.evalJson(code)`
 - `obsidian.dev.evalRaw(code)`
 - `obsidian.dev.diagnostics()`
 - `obsidian.dev.resetDiagnostics()`
@@ -626,7 +626,7 @@ test("waits for generated content and plugin state", async ({ obsidian, sandbox,
     },
     body: "# Today\n",
   });
-  await sandbox.waitForFrontmatter("Inbox/Today.md", (frontmatter) =>
+  await obsidian.metadata.waitForFrontmatter(sandbox.path("Inbox/Today.md"), (frontmatter) =>
     frontmatter.tags.includes("daily"),
   );
 
@@ -678,9 +678,10 @@ test("inspects live UI state", async ({ obsidian }) => {
 });
 ```
 
-`obsidian.dev.eval()` now uses a structured JSON envelope and throws remote
-stack information when the evaluated code fails. Use `obsidian.dev.evalRaw()`
-only when you intentionally need the unstructured CLI output. `dev.dom()` and
+`obsidian.dev.eval()` remains the low-level escape hatch and preserves the raw
+CLI parsing behavior. Use `obsidian.dev.evalJson()` when you want JSON-safe
+typed results and remote error details, and `obsidian.dev.evalRaw()` when you
+intentionally need the unstructured CLI output. `dev.dom()` and
 `dev.screenshot()` remain the safer wrappers around the built-in developer CLI
 commands. Screenshot behavior depends on the active desktop environment, so
 start by validating it locally before relying on it in automation.
@@ -691,17 +692,19 @@ start by validating it locally before relying on it in automation.
   workspace state, it does not belong there.
 - `sandbox.readNote()` parses file content only. It does not imply that
   Obsidian has indexed the note.
-- `sandbox.frontmatter()` and `obsidian.metadata.*` read metadata-cache state,
-  which is the right layer for frontmatter synchronization and race-sensitive
-  tests.
-- `obsidian.dev.eval()` is structured but still low-level. Prefer the
-  higher-level metadata, sandbox, wait, plugin, and matcher helpers first.
+- `obsidian.metadata.*` reads metadata-cache state, which is the right layer
+  for frontmatter synchronization and race-sensitive tests.
+- `obsidian.dev.eval()` is the escape hatch. Prefer the higher-level metadata,
+  sandbox, wait, plugin, and matcher helpers first, and use
+  `obsidian.dev.evalJson()` when you need structured JSON-safe results.
 
 ## Migration Notes
 
-- If you relied on raw `obsidian.dev.eval()` output strings, switch those calls
-  to `obsidian.dev.evalRaw()`. The structured `eval()` path now expects JSON-safe
-  values and throws `DevEvalError` with the remote stack.
+- Keep using `obsidian.dev.eval()` for the raw escape hatch semantics.
+- Use `obsidian.dev.evalJson()` when you want JSON-safe typed results and
+  `DevEvalError` stack details.
+- Use `obsidian.metadata.*` for metadata-cache synchronization, including notes
+  created under `sandbox.path(...)`.
 - Prefer `sandbox.writeNote()` over hand-built YAML strings when the test is
   describing note content rather than string formatting.
 - Prefer `plugin.updateDataAndReload()` or `plugin.withPatchedData()` over open-

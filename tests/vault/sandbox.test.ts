@@ -117,14 +117,15 @@ describe("createSandboxApi", () => {
     await expect(fs.access(path.join(vaultRoot, sandbox.root))).rejects.toThrow();
   });
 
-  test("reads note models and metadata-backed frontmatter", async () => {
+  test("reads note models while metadata stays on obsidian.metadata", async () => {
     const vaultRoot = await createVaultRoot();
     const metadataByPath: Record<string, { frontmatter: { tags: string[] } } | null> = {};
+    const obsidian = createStubObsidianClient({
+      metadataByPath,
+      vaultRoot,
+    });
     const sandbox = await createSandboxApi({
-      obsidian: createStubObsidianClient({
-        metadataByPath,
-        vaultRoot,
-      }),
+      obsidian,
       sandboxRoot: "__obsidian_e2e__",
       testName: "Notes",
     });
@@ -143,7 +144,7 @@ describe("createSandboxApi", () => {
       },
       raw: "---\ntitle: Daily\n---\nBody\n",
     });
-    await expect(sandbox.frontmatter("test.md")).resolves.toEqual({
+    await expect(obsidian.metadata.frontmatter(sandbox.path("test.md"))).resolves.toEqual({
       tags: ["daily"],
     });
   });
@@ -151,12 +152,13 @@ describe("createSandboxApi", () => {
   test("writes note documents and waits for metadata by default", async () => {
     const vaultRoot = await createVaultRoot();
     const metadataByPath: Record<string, { frontmatter: { title: string } } | null> = {};
+    const obsidian = createStubObsidianClient({
+      metadataByPath,
+      vaultRoot,
+      waitFor: (callback, options) => waitForValue(callback, options),
+    });
     const sandbox = await createSandboxApi({
-      obsidian: createStubObsidianClient({
-        metadataByPath,
-        vaultRoot,
-        waitFor: (callback, options) => waitForValue(callback, options),
-      }),
+      obsidian,
       sandboxRoot: "__obsidian_e2e__",
       testName: "Notes",
     });
@@ -166,6 +168,14 @@ describe("createSandboxApi", () => {
       metadataByPath[sandbox.path("test.md")] = {
         frontmatter: {
           title: "Daily",
+        },
+      };
+    }, 5);
+    metadataByPath[sandbox.path("third.md")] = null;
+    setTimeout(() => {
+      metadataByPath[sandbox.path("third.md")] = {
+        frontmatter: {
+          title: "Third",
         },
       };
     }, 5);
@@ -189,8 +199,64 @@ describe("createSandboxApi", () => {
       },
       raw: "---\ntitle: Daily\n---\nBody\n",
     });
-    await expect(sandbox.waitForFrontmatter("test.md")).resolves.toEqual({
+    await expect(
+      sandbox.writeNote({
+        body: "Second body\n",
+        frontmatter: {
+          title: "Second",
+        },
+        path: "second.md",
+        waitForMetadata: false,
+      }),
+    ).resolves.toEqual({
+      body: "Second body\n",
+      frontmatter: {
+        title: "Second",
+      },
+      raw: "---\ntitle: Second\n---\nSecond body\n",
+    });
+    await expect(
+      sandbox.writeNote({
+        body: "Third body\n",
+        frontmatter: {
+          title: "Third",
+        },
+        path: "third.md",
+        waitForMetadata: (value) => value.frontmatter?.title === "Third",
+        waitOptions: {
+          intervalMs: 1,
+          timeoutMs: 50,
+        },
+      }),
+    ).resolves.toEqual({
+      body: "Third body\n",
+      frontmatter: {
+        title: "Third",
+      },
+      raw: "---\ntitle: Third\n---\nThird body\n",
+    });
+    await expect(sandbox.readNote("second.md")).resolves.toEqual({
+      body: "Second body\n",
+      frontmatter: {
+        title: "Second",
+      },
+      raw: "---\ntitle: Second\n---\nSecond body\n",
+    });
+    await expect(sandbox.readNote("third.md")).resolves.toEqual({
+      body: "Third body\n",
+      frontmatter: {
+        title: "Third",
+      },
+      raw: "---\ntitle: Third\n---\nThird body\n",
+    });
+    expect(sandbox.path("nested", "note.md")).toBe(`${sandbox.root}/nested/note.md`);
+    await expect(obsidian.metadata.waitForFrontmatter(sandbox.path("test.md"))).resolves.toEqual({
       title: "Daily",
+    });
+    await expect(obsidian.metadata.waitForMetadata(sandbox.path("third.md"))).resolves.toEqual({
+      frontmatter: {
+        title: "Third",
+      },
     });
   });
 });

@@ -15,7 +15,6 @@ import type {
   WorkspaceNode,
   WorkspaceTab,
 } from "../../src/core/types";
-import type { HarnessMethodName } from "../../src/dev/harness";
 
 type Awaitable<T> = Promise<T> | T;
 
@@ -28,6 +27,7 @@ interface CreateStubObsidianClientOptions {
   metadataByPath?: Record<string, MetadataFileCache<NoteFrontmatter> | null>;
   notices?: DevNoticeEvent[];
   onEval?: (code: string) => Awaitable<unknown>;
+  onEvalJson?: (code: string) => Awaitable<unknown>;
   onEvalRaw?: (code: string) => Awaitable<string>;
   onScreenshot?: (path: string) => Promise<string> | string;
   pluginFactory?: (client: ObsidianClient, id: string) => PluginHandle;
@@ -112,27 +112,24 @@ export function createStubObsidianClient(options: CreateStubObsidianClientOption
 
         throw new Error(`Unhandled dev.eval code: ${code}`);
       },
+      async evalJson(code: string) {
+        if (options.onEvalJson) {
+          return options.onEvalJson(code) as never;
+        }
+
+        if (options.onEval) {
+          return options.onEval(code) as never;
+        }
+
+        throw new Error(`Unhandled dev.evalJson code: ${code}`);
+      },
       async evalRaw(code: string) {
         if (options.onEvalRaw) {
           return options.onEvalRaw(code);
         }
 
-        const harnessResult = runHarnessEval(code, {
-          activeFile,
-          diagnostics,
-          editorText,
-          metadataByPath,
-        });
-
-        if (harnessResult !== undefined) {
-          return harnessResult;
-        }
-
         if (options.onEval) {
-          return JSON.stringify({
-            ok: true,
-            value: await options.onEval(code),
-          });
+          return String(await options.onEval(code));
         }
 
         return code;
@@ -294,56 +291,4 @@ export function createStubObsidianClient(options: CreateStubObsidianClientOption
   }
 
   return client;
-}
-
-function runHarnessEval(
-  code: string,
-  state: {
-    activeFile: string | null;
-    diagnostics: DevDiagnostics;
-    editorText: string | null;
-    metadataByPath: Record<string, MetadataFileCache<NoteFrontmatter> | null>;
-  },
-): string | undefined {
-  const methodMatch = code.match(/const __obsidianE2EMethod = "([^"]+)";/u);
-  const argsMatch = code.match(/const __obsidianE2EArgs = (\[[\s\S]*?\]);/u);
-
-  if (!methodMatch) {
-    return undefined;
-  }
-
-  const method = methodMatch[1] as HarnessMethodName;
-  const args = argsMatch ? (JSON.parse(argsMatch[1]!) as unknown[]) : [];
-
-  const ok = (value: unknown) => JSON.stringify({ ok: true, value });
-
-  switch (method) {
-    case "activeFilePath":
-      return ok(state.activeFile);
-    case "consoleMessages":
-      return ok(state.diagnostics.consoleMessages);
-    case "diagnostics":
-      return ok(state.diagnostics);
-    case "editorText":
-      return ok(state.editorText);
-    case "eval":
-      return ok(null);
-    case "frontmatter":
-      return ok(state.metadataByPath[String(args[0])]?.frontmatter ?? null);
-    case "metadata":
-      return ok(state.metadataByPath[String(args[0])] ?? null);
-    case "notices":
-      return ok(state.diagnostics.notices);
-    case "pluginLoaded":
-      return ok(true);
-    case "resetDiagnostics":
-      state.diagnostics.consoleMessages.splice(0);
-      state.diagnostics.notices.splice(0);
-      state.diagnostics.runtimeErrors.splice(0);
-      return ok(true);
-    case "runtimeErrors":
-      return ok(state.diagnostics.runtimeErrors);
-    default:
-      return undefined;
-  }
 }

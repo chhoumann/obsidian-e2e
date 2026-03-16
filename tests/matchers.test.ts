@@ -85,12 +85,9 @@ describe("obsidian-e2e matchers", () => {
     await expect(plugin).toHavePluginData({ enabled: true });
   });
 
-  test("asserts note shape and metadata-backed frontmatter", async () => {
+  test("asserts note shape and file-derived frontmatter", async () => {
     const vaultRoot = await createVaultRoot();
-    const metadataByPath: Record<string, { frontmatter: { tags: string[] } } | null> = {};
-    const obsidian = createStubClient(vaultRoot, {
-      metadataByPath,
-    });
+    const obsidian = createStubClient(vaultRoot);
     const sandbox = await createSandboxApi({
       obsidian,
       sandboxRoot: "__obsidian_e2e__",
@@ -98,11 +95,6 @@ describe("obsidian-e2e matchers", () => {
     });
 
     await sandbox.write("note.md", "---\ntitle: Daily\n---\nBody\n");
-    metadataByPath[sandbox.path("note.md")] = {
-      frontmatter: {
-        tags: ["daily"],
-      },
-    };
 
     await expect(sandbox).toHaveNote("note.md", {
       bodyIncludes: "Body",
@@ -111,7 +103,7 @@ describe("obsidian-e2e matchers", () => {
       },
     });
     await expect(sandbox).toHaveFrontmatter("note.md", {
-      tags: ["daily"],
+      title: "Daily",
     });
   });
 });

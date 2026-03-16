@@ -231,6 +231,7 @@ export interface ObsidianDevHandle {
   dom(options: DevDomQueryOptions, execOptions?: ExecOptions): Promise<DevDomResult>;
   editorText(execOptions?: ExecOptions): Promise<string | null>;
   eval<T = unknown>(code: string, options?: ExecOptions): Promise<T>;
+  evalJson<T = unknown>(code: string, options?: ExecOptions): Promise<T>;
   evalRaw(code: string, options?: ExecOptions): Promise<string>;
   notices(execOptions?: ExecOptions): Promise<DevNoticeEvent[]>;
   resetDiagnostics(execOptions?: ExecOptions): Promise<void>;
@@ -371,21 +372,10 @@ export interface SandboxApi extends VaultApi {
   readonly root: string;
 
   cleanup(): Promise<void>;
-  frontmatter<T extends NoteFrontmatter = NoteFrontmatter>(path: string): Promise<T | null>;
   path(...segments: string[]): string;
   readNote<TFrontmatter extends NoteFrontmatter | null = NoteFrontmatter | null>(
     path: string,
   ): Promise<NoteDocument<TFrontmatter>>;
-  waitForFrontmatter<T extends NoteFrontmatter = NoteFrontmatter>(
-    path: string,
-    predicate?: MetadataPredicate<T>,
-    options?: MetadataWaitOptions,
-  ): Promise<T>;
-  waitForMetadata<T = MetadataFileCache>(
-    path: string,
-    predicate?: MetadataPredicate<T>,
-    options?: MetadataWaitOptions,
-  ): Promise<T>;
   writeNote<TFrontmatter extends NoteFrontmatter | null = NoteFrontmatter | null>(
     options: SandboxWriteNoteOptions<TFrontmatter>,
   ): Promise<NoteDocument<TFrontmatter>>;

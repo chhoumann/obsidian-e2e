@@ -70,8 +70,21 @@ expect.extend({
       pass,
     };
   },
-  async toHaveFrontmatter(target: SandboxApi, targetPath: string, expected: NoteFrontmatter) {
-    const actual = await target.frontmatter(targetPath);
+  async toHaveFrontmatter(
+    target: FileMatcherTarget,
+    targetPath: string,
+    expected: NoteFrontmatter,
+  ) {
+    const exists = await target.exists(targetPath);
+
+    if (!exists) {
+      return {
+        message: () => `Expected vault path to exist: ${targetPath}`,
+        pass: false,
+      };
+    }
+
+    const actual = parseNoteDocument(await target.read(targetPath)).frontmatter;
     const pass = isDeepStrictEqual(actual, expected);
 
     return {

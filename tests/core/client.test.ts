@@ -1,3 +1,7 @@
+import { chmod, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+
 import { describe, expect, test, vi } from "vite-plus/test";
 
 import { createObsidianClient } from "../../src/core/client";
@@ -379,23 +383,12 @@ describe("createObsidianClient", () => {
     expect(commandsAttempts).toBeGreaterThan(1);
   });
 
-  test("exposes developer eval, evalRaw, metadata, diagnostics, and screenshot helpers", async () => {
+  test("exposes evalJson, evalRaw, metadata, diagnostics, and screenshot helpers", async () => {
     const transport = vi.fn<CommandTransport>().mockImplementation(async (request) => {
       if (request.argv[1] === "eval") {
-        const code = request.argv.find((entry) => entry.startsWith("code=")) ?? "";
+        const code = getCodeArg(request.argv);
 
-        if (code.includes('const __obsidianE2EMethod = "eval"')) {
-          return {
-            argv: request.argv,
-            command: request.bin,
-            exitCode: 0,
-            stderr: "",
-            stdout:
-              '{"ok":true,"value":{"activeFile":"Inbox/Today.md","values":[1,{"nested":"ok"}]}}\n',
-          };
-        }
-
-        if (code.includes('const __obsidianE2EMethod = "metadata"')) {
+        if (code.includes("metadataCache?.getFileCache?.(__obsidianE2EFile)")) {
           return {
             argv: request.argv,
             command: request.bin,
@@ -405,7 +398,7 @@ describe("createObsidianClient", () => {
           };
         }
 
-        if (code.includes('const __obsidianE2EMethod = "diagnostics"')) {
+        if (code.includes('__obsidianE2EMethod=\\"diagnostics\\"')) {
           return {
             argv: request.argv,
             command: request.bin,
@@ -416,13 +409,24 @@ describe("createObsidianClient", () => {
           };
         }
 
-        if (code.includes('const __obsidianE2EMethod = "resetDiagnostics"')) {
+        if (code.includes('__obsidianE2EMethod=\\"reset\\"')) {
           return {
             argv: request.argv,
             command: request.bin,
             exitCode: 0,
             stderr: "",
             stdout: '{"ok":true,"value":true}\n',
+          };
+        }
+
+        if (code.includes("__obsidianE2ESerialize")) {
+          return {
+            argv: request.argv,
+            command: request.bin,
+            exitCode: 0,
+            stderr: "",
+            stdout:
+              '{"ok":true,"value":{"activeFile":"Inbox/Today.md","values":[1,{"nested":"ok"}]}}\n',
           };
         }
 
@@ -474,7 +478,7 @@ describe("createObsidianClient", () => {
     });
 
     await expect(
-      client.dev.eval<{ activeFile: string; values: unknown[] }>("code"),
+      client.dev.evalJson<{ activeFile: string; values: unknown[] }>("code"),
     ).resolves.toEqual({
       activeFile: "Inbox/Today.md",
       values: [1, { nested: "ok" }],
@@ -499,7 +503,47 @@ describe("createObsidianClient", () => {
     await expect(client.dev.screenshot("/tmp/shot.png")).resolves.toBe("/tmp/shot.png");
   });
 
-  test("raises remote eval failures with remote stack details", async () => {
+  test("preserves legacy eval parsing semantics", async () => {
+    const transport = vi.fn<CommandTransport>().mockImplementation(async (request) => {
+      if (request.argv[1] !== "eval") {
+        throw new Error(`Unhandled request: ${request.argv.join(" ")}`);
+      }
+
+      const code = getCodeArg(request.argv);
+
+      if (code === "1 + 1") {
+        return {
+          argv: request.argv,
+          command: request.bin,
+          exitCode: 0,
+          stderr: "",
+          stdout: "=> 2\n",
+        };
+      }
+
+      if (code === "raw-value") {
+        return {
+          argv: request.argv,
+          command: request.bin,
+          exitCode: 0,
+          stderr: "",
+          stdout: "Inbox/Today.md\n",
+        };
+      }
+
+      throw new Error(`Unhandled eval request: ${request.argv.join(" ")}`);
+    });
+
+    const client = createObsidianClient({
+      transport,
+      vault: "dev",
+    });
+
+    await expect(client.dev.eval<number>("1 + 1")).resolves.toBe(2);
+    await expect(client.dev.eval<string>("raw-value")).resolves.toBe("Inbox/Today.md");
+  });
+
+  test("raises remote evalJson failures with remote stack details", async () => {
     const transport = vi.fn<CommandTransport>().mockResolvedValue({
       argv: ["vault=dev", "eval"],
       command: "obsidian",
@@ -514,8 +558,8 @@ describe("createObsidianClient", () => {
       vault: "dev",
     });
 
-    await expect(client.dev.eval("broken()")).rejects.toBeInstanceOf(DevEvalError);
-    await expect(client.dev.eval("broken()")).rejects.toMatchObject({
+    await expect(client.dev.evalJson("broken()")).rejects.toBeInstanceOf(DevEvalError);
+    await expect(client.dev.evalJson("broken()")).rejects.toMatchObject({
       message: expect.stringContaining("Nope"),
       remote: {
         message: "Nope",
@@ -523,6 +567,47 @@ describe("createObsidianClient", () => {
         stack: "TypeError: Nope\n    at eval",
       },
     });
+  });
+
+  test("rejects unsupported evalJson values with clear errors", async () => {
+    const transport = vi.fn<CommandTransport>().mockResolvedValue({
+      argv: ["vault=dev", "eval"],
+      command: "obsidian",
+      exitCode: 0,
+      stderr: "",
+      stdout:
+        '{"ok":false,"error":{"name":"Error","message":"Cannot serialize non-plain object at $.value","stack":"Error: Cannot serialize non-plain object at $.value"}}\n',
+    });
+
+    const client = createObsidianClient({
+      transport,
+      vault: "dev",
+    });
+
+    await expect(client.dev.evalJson("unsupported()")).rejects.toMatchObject({
+      message: expect.stringContaining("Cannot serialize non-plain object"),
+      remote: {
+        message: "Cannot serialize non-plain object at $.value",
+        name: "Error",
+      },
+    });
+  });
+
+  test("round-trips undefined through evalJson", async () => {
+    const transport = vi.fn<CommandTransport>().mockResolvedValue({
+      argv: ["vault=dev", "eval"],
+      command: "obsidian",
+      exitCode: 0,
+      stderr: "",
+      stdout: '{"ok":true,"value":{"__obsidianE2EType":"undefined"}}\n',
+    });
+
+    const client = createObsidianClient({
+      transport,
+      vault: "dev",
+    });
+
+    await expect(client.dev.evalJson("undefined")).resolves.toBeUndefined();
   });
 
   test("provides a first-class sleep helper", async () => {
@@ -540,7 +625,7 @@ describe("createObsidianClient", () => {
     await expect(client.sleep(5)).resolves.toBeUndefined();
   });
 
-  test("waits for active files and harness diagnostics", async () => {
+  test("waits for active files and diagnostics", async () => {
     let activeFileAttempts = 0;
     let consoleAttempts = 0;
     let noticeAttempts = 0;
@@ -553,21 +638,18 @@ describe("createObsidianClient", () => {
 
       const code = request.argv.find((entry) => entry.startsWith("code=")) ?? "";
 
-      if (code.includes('const __obsidianE2EMethod = "activeFilePath"')) {
+      if (code === "code=app.workspace.getActiveFile()?.path ?? null") {
         activeFileAttempts += 1;
         return {
           argv: request.argv,
           command: request.bin,
           exitCode: 0,
           stderr: "",
-          stdout: JSON.stringify({
-            ok: true,
-            value: activeFileAttempts > 1 ? "Inbox/Today.md" : "Inbox/Pending.md",
-          }),
+          stdout: `${activeFileAttempts > 1 ? "Inbox/Today.md" : "Inbox/Pending.md"}\n`,
         };
       }
 
-      if (code.includes('const __obsidianE2EMethod = "consoleMessages"')) {
+      if (code.includes('__obsidianE2EMethod=\\"consoleMessages\\"')) {
         consoleAttempts += 1;
         return {
           argv: request.argv,
@@ -581,7 +663,7 @@ describe("createObsidianClient", () => {
         };
       }
 
-      if (code.includes('const __obsidianE2EMethod = "notices"')) {
+      if (code.includes('__obsidianE2EMethod=\\"notices\\"')) {
         noticeAttempts += 1;
         return {
           argv: request.argv,
@@ -595,7 +677,7 @@ describe("createObsidianClient", () => {
         };
       }
 
-      if (code.includes('const __obsidianE2EMethod = "runtimeErrors"')) {
+      if (code.includes('__obsidianE2EMethod=\\"runtimeErrors\\"')) {
         runtimeErrorAttempts += 1;
         return {
           argv: request.argv,
@@ -635,6 +717,59 @@ describe("createObsidianClient", () => {
       message: "boom",
       source: "error",
     });
+  });
+
+  test("passes direct and structured eval code through the spawned transport", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "obsidian-e2e-client-"));
+    const logPath = path.join(tempDir, "argv.log");
+    const binPath = path.join(tempDir, "fake-obsidian");
+
+    await writeFile(
+      binPath,
+      [
+        "#!/usr/bin/env node",
+        "import { appendFileSync } from 'node:fs';",
+        "const argv = process.argv.slice(2);",
+        "appendFileSync(process.env.OBSIDIAN_E2E_TEST_LOG, `${JSON.stringify(argv)}\\n`, 'utf8');",
+        "const codeArg = argv.find((entry) => entry.startsWith('code=')) ?? '';",
+        "const code = codeArg.slice(5);",
+        "if (argv[1] !== 'eval') { process.stdout.write(''); process.exit(0); }",
+        'if (code.includes(\'__obsidianE2ESerialize\')) { process.stdout.write(\'{"ok":true,"value":{"ok":true,"items":[1,2]}}\\n\'); process.exit(0); }',
+        "process.stdout.write('=> 2\\n');",
+      ].join("\n"),
+      "utf8",
+    );
+    await chmod(binPath, 0o755);
+
+    const client = createObsidianClient({
+      bin: binPath,
+      defaultExecOptions: {
+        env: {
+          ...process.env,
+          OBSIDIAN_E2E_TEST_LOG: logPath,
+        },
+      },
+      vault: "dev",
+    });
+
+    await expect(client.dev.eval<number>("1 + 1")).resolves.toBe(2);
+    await expect(
+      client.dev.evalJson<{ items: number[]; ok: boolean }>("({ ok: true, items: [1, 2] })"),
+    ).resolves.toEqual({
+      items: [1, 2],
+      ok: true,
+    });
+
+    const loggedArgv = (await readFile(logPath, "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as string[]);
+
+    expect(loggedArgv).toHaveLength(2);
+    expect(loggedArgv.every((argv) => argv[1] === "eval")).toBe(true);
+    expect(loggedArgv.map((argv) => getCodeArg(argv)).every((code) => !code.includes("\n"))).toBe(
+      true,
+    );
   });
 
   test("exports a reusable exec option merge helper", () => {
@@ -806,4 +941,8 @@ describe("createObsidianClient", () => {
       }),
     );
   });
+
+  function getCodeArg(argv: string[]): string {
+    return argv.find((entry) => entry.startsWith("code="))?.slice(5) ?? "";
+  }
 });

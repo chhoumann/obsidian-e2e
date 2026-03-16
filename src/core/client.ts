@@ -1,10 +1,11 @@
 import { buildCommandArgv } from "./args";
-import { buildHarnessCallCode, createDevDiagnostics, parseHarnessEnvelope } from "../dev/harness";
 import { mergeExecOptions } from "./exec-options";
 import { attachClientInternals, createRestoreManager } from "./internals";
 import { createObsidianMetadataHandle } from "../metadata/metadata";
 import { createPluginHandle } from "../plugin/plugin";
 import { executeCommand } from "./transport";
+import { buildDiagnosticsCode, createDevDiagnostics } from "../dev/diagnostics";
+import { parseDevEvalOutput, runEvalJson } from "../dev/eval-json";
 import type {
   CommandListOptions,
   CreateObsidianClientOptions,
@@ -29,7 +30,6 @@ import type {
   WorkspaceOptions,
   WorkspaceTab,
 } from "./types";
-import { DevEvalError } from "./errors";
 import { sleep, waitForValue } from "./wait";
 
 export function createObsidianClient(options: CreateObsidianClientOptions): ObsidianClient {
@@ -83,14 +83,14 @@ export function createObsidianClient(options: CreateObsidianClientOptions): Obsi
 
   const dev: ObsidianDevHandle = {
     async activeFilePath(execOptions: ExecOptions = {}) {
-      return readHarnessValue<string | null>(this, "activeFilePath", execOptions);
+      return this.eval<string | null>("app.workspace.getActiveFile()?.path ?? null", execOptions);
     },
     async consoleMessages(execOptions: ExecOptions = {}) {
-      return readHarnessValue<DevConsoleMessage[]>(this, "consoleMessages", execOptions);
+      return readDiagnosticsValue<DevConsoleMessage[]>(this, "consoleMessages", execOptions);
     },
     async diagnostics(execOptions: ExecOptions = {}): Promise<DevDiagnostics> {
       return createDevDiagnostics(
-        await readHarnessValue<DevDiagnostics>(this, "diagnostics", execOptions),
+        await readDiagnosticsValue<DevDiagnostics>(this, "diagnostics", execOptions),
       );
     },
     async dom(options: DevDomQueryOptions, execOptions: ExecOptions = {}): Promise<DevDomResult> {
@@ -119,28 +119,10 @@ export function createObsidianClient(options: CreateObsidianClientOptions): Obsi
       return output;
     },
     async eval<T = unknown>(code: string, execOptions: ExecOptions = {}) {
-      try {
-        return parseHarnessEnvelope<T>(
-          await this.evalRaw(buildHarnessCallCode("eval", code), execOptions),
-        );
-      } catch (error) {
-        if (
-          error &&
-          typeof error === "object" &&
-          "message" in error &&
-          "name" in error &&
-          typeof error.message === "string" &&
-          typeof error.name === "string"
-        ) {
-          throw new DevEvalError(`Failed to evaluate Obsidian code: ${error.message}`, {
-            message: error.message,
-            name: error.name,
-            stack: "stack" in error && typeof error.stack === "string" ? error.stack : undefined,
-          });
-        }
-
-        throw error;
-      }
+      return parseDevEvalOutput<T>(await this.evalRaw(code, execOptions));
+    },
+    async evalJson<T = unknown>(code: string, execOptions: ExecOptions = {}) {
+      return runEvalJson<T>(this, code, execOptions);
     },
     async evalRaw(code: string, execOptions: ExecOptions = {}) {
       return client.execText(
@@ -152,16 +134,19 @@ export function createObsidianClient(options: CreateObsidianClientOptions): Obsi
       );
     },
     async editorText(execOptions: ExecOptions = {}) {
-      return readHarnessValue<string | null>(this, "editorText", execOptions);
+      return this.eval<string | null>(
+        "app.workspace.activeLeaf?.view?.editor?.getValue?.() ?? null",
+        execOptions,
+      );
     },
     async notices(execOptions: ExecOptions = {}) {
-      return readHarnessValue<DevNoticeEvent[]>(this, "notices", execOptions);
+      return readDiagnosticsValue<DevNoticeEvent[]>(this, "notices", execOptions);
     },
     async resetDiagnostics(execOptions: ExecOptions = {}) {
-      await readHarnessValue<void>(this, "resetDiagnostics", execOptions);
+      await readDiagnosticsValue<boolean>(this, "reset", execOptions);
     },
     async runtimeErrors(execOptions: ExecOptions = {}) {
-      return readHarnessValue<DevRuntimeError[]>(this, "runtimeErrors", execOptions);
+      return readDiagnosticsValue<DevRuntimeError[]>(this, "runtimeErrors", execOptions);
     },
     async screenshot(targetPath: string, execOptions: ExecOptions = {}) {
       await client.exec(
@@ -461,19 +446,12 @@ async function waitForDiagnosticEntry<T>(
   );
 }
 
-async function readHarnessValue<T>(
+async function readDiagnosticsValue<T>(
   dev: Pick<ObsidianDevHandle, "evalRaw">,
-  method:
-    | "activeFilePath"
-    | "consoleMessages"
-    | "diagnostics"
-    | "editorText"
-    | "notices"
-    | "resetDiagnostics"
-    | "runtimeErrors",
+  method: "consoleMessages" | "diagnostics" | "notices" | "reset" | "runtimeErrors",
   execOptions?: ExecOptions,
 ): Promise<T> {
-  return parseHarnessEnvelope<T>(await dev.evalRaw(buildHarnessCallCode(method), execOptions));
+  return runEvalJson<T>(dev, buildDiagnosticsCode(method), execOptions);
 }
 
 function getWorkspaceDepth(line: string): number {

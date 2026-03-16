@@ -36,9 +36,6 @@ export async function createSandboxApi(options: CreateSandboxApiOptions): Promis
     async cleanup() {
       await vault.delete(".", { permanent: true });
     },
-    async frontmatter(targetPath) {
-      return options.obsidian.metadata.frontmatter(sandboxPath(targetPath));
-    },
     path(...segments: string[]) {
       return sandboxPath(...segments);
     },
@@ -48,20 +45,6 @@ export async function createSandboxApi(options: CreateSandboxApiOptions): Promis
       return parseNoteDocument(await vault.read(targetPath)) as NoteDocument<TFrontmatter>;
     },
     root,
-    async waitForFrontmatter(targetPath, predicate, waitOptions) {
-      return options.obsidian.metadata.waitForFrontmatter(
-        sandboxPath(targetPath),
-        predicate,
-        waitOptions,
-      );
-    },
-    async waitForMetadata(targetPath, predicate, waitOptions) {
-      return options.obsidian.metadata.waitForMetadata(
-        sandboxPath(targetPath),
-        predicate,
-        waitOptions,
-      );
-    },
     async writeNote<TFrontmatter extends NoteFrontmatter | null = NoteFrontmatter | null>(
       writeOptions: SandboxWriteNoteOptions<TFrontmatter>,
     ): Promise<NoteDocument<TFrontmatter>> {
