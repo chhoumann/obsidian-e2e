@@ -46,9 +46,21 @@ export function parseArgs(argv: string[], spec: ArgsParserSpec): ParsedArgs {
     const arg = argv[index];
     if (arg === undefined) continue;
 
-    // Bare `--` is a true end-of-options terminator: everything after it is the
-    // forwarded command, never re-parsed as flags.
     if (arg === "--") {
+      // A leading `--` immediately followed by one of our own flags is
+      // package-manager noise, not a terminator: `pnpm run <script> -- --print-env`
+      // (and the npm equivalent) forward the literal `--` ahead of the script
+      // args, so dropping everything after it would silently swallow `--print-env`
+      // and friends. Skip that separator and keep parsing options. A `--` anywhere
+      // else - or one followed by the forwarded command - stays a true
+      // end-of-options terminator.
+      const next = argv[index + 1];
+      const nextIsOwnFlag =
+        next !== undefined &&
+        (spec.booleanOptions[next] !== undefined || spec.valueOptions[next] !== undefined);
+      if (index === 0 && nextIsOwnFlag) {
+        continue;
+      }
       return { options, rest: argv.slice(index + 1) };
     }
 

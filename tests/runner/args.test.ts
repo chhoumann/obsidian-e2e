@@ -52,6 +52,29 @@ describe("parseArgs", () => {
     expect(rest).toEqual(["eval", "--force"]);
   });
 
+  test("skips a leading package-manager -- before a boolean flag", () => {
+    // `pnpm run <script> -- --print-env` forwards the literal `--` ahead of the
+    // script args; a leading `--` before one of our flags must not swallow it.
+    const { options, rest } = parseArgs(["--", "--print-env"], {
+      valueOptions: SHARED_VALUE_OPTIONS,
+      booleanOptions: { ...SHARED_BOOLEAN_OPTIONS, "--print-env": "printEnv" },
+    });
+    expect(options).toEqual({ printEnv: true });
+    expect(rest).toEqual([]);
+  });
+
+  test("skips a leading package-manager -- before a value flag, then stops at the command", () => {
+    const { options, rest } = parseArgs(["--", "--vault", "dev", "eval", "code=x"], spec);
+    expect(options).toEqual({ vault: "dev" });
+    expect(rest).toEqual(["eval", "code=x"]);
+  });
+
+  test("keeps a leading -- as a terminator when the forwarded command follows", () => {
+    const { options, rest } = parseArgs(["--", "eval", "code=x"], spec);
+    expect(options).toEqual({});
+    expect(rest).toEqual(["eval", "code=x"]);
+  });
+
   test("stops at the first non-option token and forwards the rest", () => {
     const { options, rest } = parseArgs(["--force", "quickadd:list", "--json"], spec);
     expect(options).toEqual({ force: true });
