@@ -5,7 +5,7 @@ import { createObsidianMetadataHandle } from "../metadata/metadata";
 import { createPluginHandle } from "../plugin/plugin";
 import { executeCommand } from "./transport";
 import { buildDiagnosticsCode, createDevDiagnostics } from "../dev/diagnostics";
-import { parseDevEvalOutput, runEvalJson } from "../dev/eval-json";
+import { parseDevEvalOutput, runEvalJson, runEvalJsonAsync } from "../dev/eval-json";
 import type {
   CommandListOptions,
   CreateObsidianClientOptions,
@@ -123,6 +123,9 @@ export function createObsidianClient(options: CreateObsidianClientOptions): Obsi
     },
     async evalJson<T = unknown>(code: string, execOptions: ExecOptions = {}) {
       return runEvalJson<T>(this, code, execOptions);
+    },
+    async evalJsonAsync<T = unknown>(code: string, execOptions: ExecOptions = {}) {
+      return runEvalJsonAsync<T>(this, code, execOptions);
     },
     async evalRaw(code: string, execOptions: ExecOptions = {}) {
       return client.execText(
