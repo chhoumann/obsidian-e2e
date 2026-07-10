@@ -12,6 +12,9 @@
     "type": "git",
     "url": "git+https://github.com/chhoumann/obsidian-e2e.git"
   },
+  "bin": {
+    "obsidian-e2e": "./dist/runner/bin.mjs"
+  },
   "files": [
     "dist"
   ],
@@ -32,6 +35,10 @@
     "./matchers": {
       "types": "./dist/matchers.d.mts",
       "default": "./dist/matchers.mjs"
+    },
+    "./runner": {
+      "types": "./dist/runner/index.d.mts",
+      "default": "./dist/runner/index.mjs"
     },
     "./package.json": "./package.json"
   },
