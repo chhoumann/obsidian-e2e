@@ -23,9 +23,12 @@ Requirements:
 
 - `obsidian-e2e`
   - low-level client and shared types
+  - `resolveObsidianEnvOptions()` / `verifyVaultPath()`
 - `obsidian-e2e/vitest`
   - `createObsidianTest()`
   - `createPluginTest()`
+  - `createPluginHarness()` (suite-scoped)
+  - `resolveObsidianEnvOptions()` / `verifyVaultPath()`
 - `obsidian-e2e/matchers`
   - optional `expect` matchers for vault and sandbox assertions
 - `obsidian-e2e/runner`
@@ -512,6 +515,63 @@ test("runs against a seeded plugin fixture", async ({ plugin, vault }) => {
 });
 ```
 
+## Suite-Scoped Plugin Harness
+
+`createPluginTest()` is per-test: it reloads the plugin and sandboxes the vault
+for every `test()`. Some suites instead want one reload and one sandbox for the
+whole file, restoring only `data.json` between tests. `createPluginHarness()`
+covers that shape while reusing the same lock, sandbox, artifact, and restore
+internals - so you never hand-roll `beforeAll`/`afterEach`/`afterAll`.
+
+It returns a `(testName) => () => { obsidian, plugin, sandbox }` factory. Call it
+once per suite to register the lifecycle hooks; the returned getter yields the
+live context inside each test:
+
+```ts
+import { createPluginHarness, resolveObsidianEnvOptions } from "obsidian-e2e/vitest";
+import { expect } from "vite-plus/test";
+
+const usePodNotes = createPluginHarness({
+  pluginId: "podnotes",
+  // Canonical OBSIDIAN_E2E_* env, with a legacy per-plugin prefix fallback.
+  ...resolveObsidianEnvOptions({ legacyPrefix: "PODNOTES" }),
+  reload: { readyCommandId: "podnotes:podnotes-show-leaf", timeoutMs: 30_000 },
+  // Extra readiness beyond plugin-loaded + ready command.
+  waitUntilReady: (obsidian) =>
+    obsidian.dev.evalJson<boolean>("Boolean(app.plugins.plugins.podnotes?.api)"),
+  // Runs while the plugin is still enabled, before each data.json restore.
+  beforeDataRestore: (obsidian) =>
+    obsidian.dev.evalJsonAsync(
+      "(async () => { await app.plugins.plugins.podnotes?.saveChain; })()",
+    ),
+  symlinkArtifacts: ["main.js", "manifest.json"],
+  captureOnFailure: true,
+});
+
+const getContext = usePodNotes("podnotes-runtime");
+
+test("keeps the API available after a data reset", async () => {
+  const { obsidian, plugin, sandbox } = getContext();
+  await sandbox.writeNote({ path: "note.md", body: "hi" });
+  await expect(plugin.isEnabled()).resolves.toBe(true);
+});
+```
+
+Lifecycle: `beforeAll` acquires the vault lock and marker, runs the optional
+symlink preflight, creates the sandbox, then reloads the plugin and waits for the
+ready command plus your `waitUntilReady` predicate. `beforeEach` resets
+diagnostics; `afterEach` runs `beforeDataRestore`, restores `data.json`, and
+re-readies the plugin. `afterAll` runs an ordered, error-aggregating teardown
+that always releases the lock.
+
+`resolveObsidianEnvOptions()` maps the canonical `OBSIDIAN_E2E_VAULT`,
+`OBSIDIAN_E2E_VAULT_PATH`, and `OBSIDIAN_E2E_OBSIDIAN_HOME` env (with an optional
+`legacyPrefix` fallback such as `PODNOTES_E2E_VAULT`) into spreadable client
+options. The Obsidian home is injected into `defaultExecOptions.env.HOME`
+per-client, never mutating `process.env`. Pair the returned `expectedVaultPath`
+with `verifyVaultPath()` (or set it on the harness) to refuse running against the
+wrong vault.
+
 ## Failure Artifacts
 
 Both fixture families support opt-in artifact capture:
@@ -717,6 +777,7 @@ to the real `obsidian` CLI:
 - `obsidian.dev.dom({ ... })`
 - `obsidian.dev.eval(code)`
 - `obsidian.dev.evalJson(code)`
+- `obsidian.dev.evalJsonAsync(code)`
 - `obsidian.dev.evalRaw(code)`
 - `obsidian.dev.diagnostics()`
 - `obsidian.dev.resetDiagnostics()`
@@ -838,8 +899,11 @@ test("inspects live UI state", async ({ obsidian }) => {
 
 `obsidian.dev.eval()` remains the low-level escape hatch and preserves the raw
 CLI parsing behavior. Use `obsidian.dev.evalJson()` when you want JSON-safe
-typed results and remote error details, and `obsidian.dev.evalRaw()` when you
-intentionally need the unstructured CLI output. `dev.dom()` and
+typed results and remote error details, `obsidian.dev.evalJsonAsync()` when the
+evaluated code is an async body whose resolved value you need (it awaits the
+promise inside Obsidian before serializing the same `{ ok, value }` envelope,
+rethrowing failures as a `DevEvalError` with the remote message and stack), and
+`obsidian.dev.evalRaw()` when you intentionally need the unstructured CLI output. `dev.dom()` and
 `dev.screenshot()` remain the safer wrappers around the built-in developer CLI
 commands. Screenshot behavior depends on the active desktop environment, so
 start by validating it locally before relying on it in automation.

@@ -10,6 +10,7 @@ import { acquireVaultRunLock, clearVaultRunLockMarker, type VaultRunLock } from 
 import type { CreateObsidianTestOptions, PluginSessionOptions, TestContext } from "./types";
 
 interface CreateInternalTestContextOptions extends CreateObsidianTestOptions {
+  beforeSandbox?: (obsidian: ObsidianClient) => Promise<void> | void;
   createVault?: (obsidian: ObsidianClient) => Promise<VaultApi> | VaultApi;
   testName?: string;
   vaultLock?: VaultRunLock | null;
@@ -60,6 +61,8 @@ export async function createInternalTestContext(
     }
 
     await obsidian.dev.resetDiagnostics().catch(() => {});
+
+    await options.beforeSandbox?.(obsidian);
 
     const vault = await vaultFactory(obsidian);
     sandbox = await createSandboxApi({

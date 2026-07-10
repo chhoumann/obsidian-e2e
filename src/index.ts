@@ -4,6 +4,12 @@ export {
   DEFAULT_FAILURE_ARTIFACTS_DIR,
 } from "./artifacts/failure-artifacts";
 export { createTestContext, withVaultSandbox } from "./fixtures/test-context";
+export { resolveObsidianEnvOptions, verifyVaultPath } from "./env/resolve-env";
+export type {
+  ResolveObsidianEnvOptions,
+  ResolvedObsidianEnvOptions,
+  VerifyVaultPathOptions,
+} from "./env/resolve-env";
 export {
   acquireVaultRunLock,
   clearVaultRunLockMarker,

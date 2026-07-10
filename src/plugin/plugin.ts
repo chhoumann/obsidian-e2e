@@ -177,8 +177,12 @@ export function createPluginHandle(client: ObsidianClient, id: string): PluginHa
             return false;
           }
 
-          if (options.commandId) {
-            return await client.command(options.commandId).exists();
+          if (options.commandId && !(await client.command(options.commandId).exists())) {
+            return false;
+          }
+
+          if (options.predicate && !(await options.predicate(client))) {
+            return false;
           }
 
           return true;

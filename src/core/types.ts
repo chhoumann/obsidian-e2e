@@ -107,6 +107,7 @@ export type PluginWaitForDataOptions = WaitForOptions;
 
 export interface PluginWaitUntilReadyOptions extends WaitForOptions {
   commandId?: string;
+  predicate?: (client: ObsidianClient) => boolean | Promise<boolean>;
 }
 
 export interface PluginReloadOptions extends ExecOptions {
@@ -232,6 +233,7 @@ export interface ObsidianDevHandle {
   editorText(execOptions?: ExecOptions): Promise<string | null>;
   eval<T = unknown>(code: string, options?: ExecOptions): Promise<T>;
   evalJson<T = unknown>(code: string, options?: ExecOptions): Promise<T>;
+  evalJsonAsync<T = unknown>(code: string, options?: ExecOptions): Promise<T>;
   evalRaw(code: string, options?: ExecOptions): Promise<string>;
   notices(execOptions?: ExecOptions): Promise<DevNoticeEvent[]>;
   resetDiagnostics(execOptions?: ExecOptions): Promise<void>;

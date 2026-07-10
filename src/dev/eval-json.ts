@@ -17,6 +17,29 @@ interface UndefinedSentinel {
   __obsidianE2EType: "undefined";
 }
 
+// The serializer and the failure branch are shared verbatim by the synchronous
+// and asynchronous builders so both produce the same {ok,value}|{ok:false,error}
+// envelope, decoded by the single parseEvalJsonEnvelope path below.
+const EVAL_JSON_SERIALIZER = [
+  "const __obsidianE2ESerialize=(value,path='$')=>{",
+  "if(value===null){return null;}",
+  "if(value===undefined){return {__obsidianE2EType:'undefined'};}",
+  "const valueType=typeof value;",
+  "if(valueType==='string'||valueType==='boolean'){return value;}",
+  "if(valueType==='number'){if(!Number.isFinite(value)){throw new Error(`Cannot serialize non-finite number at ${path}.`);}return value;}",
+  "if(valueType==='bigint'||valueType==='function'||valueType==='symbol'){throw new Error(`Cannot serialize ${valueType} at ${path}.`);}",
+  "if(Array.isArray(value)){return value.map((item,index)=>__obsidianE2ESerialize(item,`${path}[${index}]`));}",
+  "const prototype=Object.getPrototypeOf(value);",
+  "if(prototype!==Object.prototype&&prototype!==null){throw new Error(`Cannot serialize non-plain object at ${path}.`);}",
+  "const next={};",
+  "for(const [key,entry] of Object.entries(value)){next[key]=__obsidianE2ESerialize(entry,`${path}.${key}`);}",
+  "return next;",
+  "};",
+].join("");
+
+const EVAL_JSON_FAILURE_BRANCH =
+  "return JSON.stringify({ok:false,error:{message:error instanceof Error?error.message:String(error),name:error instanceof Error?error.name:'Error',stack:error instanceof Error?error.stack:undefined}});";
+
 export async function runEvalJson<T>(
   dev: Pick<ObsidianDevHandle, "evalRaw">,
   code: string,
@@ -25,28 +48,42 @@ export async function runEvalJson<T>(
   return parseEvalJsonEnvelope<T>(await dev.evalRaw(buildEvalJsonCode(code), execOptions));
 }
 
+export async function runEvalJsonAsync<T>(
+  dev: Pick<ObsidianDevHandle, "evalRaw">,
+  code: string,
+  execOptions: ExecOptions = {},
+): Promise<T> {
+  return parseEvalJsonEnvelope<T>(await dev.evalRaw(buildEvalJsonAsyncCode(code), execOptions));
+}
+
 export function buildEvalJsonCode(code: string): string {
   return [
     "(()=>{",
     `const __obsidianE2ECode=${JSON.stringify(code)};`,
-    "const __obsidianE2ESerialize=(value,path='$')=>{",
-    "if(value===null){return null;}",
-    "if(value===undefined){return {__obsidianE2EType:'undefined'};}",
-    "const valueType=typeof value;",
-    "if(valueType==='string'||valueType==='boolean'){return value;}",
-    "if(valueType==='number'){if(!Number.isFinite(value)){throw new Error(`Cannot serialize non-finite number at ${path}.`);}return value;}",
-    "if(valueType==='bigint'||valueType==='function'||valueType==='symbol'){throw new Error(`Cannot serialize ${valueType} at ${path}.`);}",
-    "if(Array.isArray(value)){return value.map((item,index)=>__obsidianE2ESerialize(item,`${path}[${index}]`));}",
-    "const prototype=Object.getPrototypeOf(value);",
-    "if(prototype!==Object.prototype&&prototype!==null){throw new Error(`Cannot serialize non-plain object at ${path}.`);}",
-    "const next={};",
-    "for(const [key,entry] of Object.entries(value)){next[key]=__obsidianE2ESerialize(entry,`${path}.${key}`);}",
-    "return next;",
-    "};",
+    EVAL_JSON_SERIALIZER,
     "try{",
     "return JSON.stringify({ok:true,value:__obsidianE2ESerialize((0,eval)(__obsidianE2ECode))});",
     "}catch(error){",
-    "return JSON.stringify({ok:false,error:{message:error instanceof Error?error.message:String(error),name:error instanceof Error?error.name:'Error',stack:error instanceof Error?error.stack:undefined}});",
+    EVAL_JSON_FAILURE_BRANCH,
+    "}",
+    "})()",
+  ].join("");
+}
+
+export function buildEvalJsonAsyncCode(code: string): string {
+  // Indirect `eval` parses its argument as a script, where a top-level `await`
+  // is a SyntaxError. Wrapping the caller's code as the expression body of an
+  // async arrow makes `await` valid while still yielding the expression's value,
+  // so both `await load()` and a plain promise-returning expression work.
+  const asyncExpression = `(async()=>(${code}))()`;
+  return [
+    "(async()=>{",
+    `const __obsidianE2ECode=${JSON.stringify(asyncExpression)};`,
+    EVAL_JSON_SERIALIZER,
+    "try{",
+    "return JSON.stringify({ok:true,value:__obsidianE2ESerialize(await (0,eval)(__obsidianE2ECode))});",
+    "}catch(error){",
+    EVAL_JSON_FAILURE_BRANCH,
     "}",
     "})()",
   ].join("");

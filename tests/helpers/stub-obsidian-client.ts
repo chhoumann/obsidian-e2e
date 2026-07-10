@@ -28,6 +28,7 @@ interface CreateStubObsidianClientOptions {
   notices?: DevNoticeEvent[];
   onEval?: (code: string) => Awaitable<unknown>;
   onEvalJson?: (code: string) => Awaitable<unknown>;
+  onEvalJsonAsync?: (code: string) => Awaitable<unknown>;
   onEvalRaw?: (code: string) => Awaitable<string>;
   onScreenshot?: (path: string) => Promise<string> | string;
   pluginFactory?: (client: ObsidianClient, id: string) => PluginHandle;
@@ -122,6 +123,21 @@ export function createStubObsidianClient(options: CreateStubObsidianClientOption
         }
 
         throw new Error(`Unhandled dev.evalJson code: ${code}`);
+      },
+      async evalJsonAsync(code: string) {
+        if (options.onEvalJsonAsync) {
+          return options.onEvalJsonAsync(code) as never;
+        }
+
+        if (options.onEvalJson) {
+          return options.onEvalJson(code) as never;
+        }
+
+        if (options.onEval) {
+          return options.onEval(code) as never;
+        }
+
+        throw new Error(`Unhandled dev.evalJsonAsync code: ${code}`);
       },
       async evalRaw(code: string) {
         if (options.onEvalRaw) {
