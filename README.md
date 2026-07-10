@@ -28,6 +28,164 @@ Requirements:
   - `createPluginTest()`
 - `obsidian-e2e/matchers`
   - optional `expect` matchers for vault and sandbox assertions
+- `obsidian-e2e/runner`
+  - programmatic API for the instance runner (see below)
+- `obsidian-e2e` bin
+  - the `obsidian-e2e <provision|start|stop|run>` command
+
+## Instance Runner (CLI)
+
+The test helpers above assume Obsidian is already running against a vault the
+`obsidian` CLI can reach. The instance runner is the piece that gets you there:
+it stands up a **worktree-isolated** Obsidian instance - its own vault, its own
+private `HOME`, and its own app process - so parallel git worktrees never collide
+on one vault and a run never touches another plugin's instance or your day-to-day
+Obsidian.
+
+Each consumer keeps a small `obsidian-e2e.config.mjs` at the worktree root and
+points four npm scripts at the bin. The runner adds zero runtime dependencies
+(Node stdlib only).
+
+### Why worktree isolation
+
+- Two checkouts of the same plugin (e.g. a feature branch and `main`) each get a
+  distinct vault name and a distinct `/tmp` profile, so their instances never
+  fight over one `obsidian vault=dev`.
+- The profile lives under a private `HOME`, so the CLI socket, keychain links, and
+  `obsidian.json` registry are all scoped to that instance.
+- A version guard refuses to run against an Obsidian build below the plugin's
+  `minAppVersion`, turning a false "missing API" failure into an explicit error.
+
+### Install and configure
+
+```bash
+pnpm add -D obsidian-e2e
+```
+
+Create `obsidian-e2e.config.mjs` at the worktree root. Only `pluginId` is
+required; every other field has the default shown here:
+
+```js
+// obsidian-e2e.config.mjs
+export default {
+  pluginId: "your-plugin", // required; drives the plugin dir, community-plugins, reload id, ready probe
+  vaultPrefix: "your-plugin", // default: pluginId. Vault name is `${vaultPrefix}-${worktree basename}`
+  pluginArtifacts: ["manifest.json", "main.js"], // symlinked into the vault; add "styles.css" if you ship one
+  defaultData: {}, // data.json seed on first provision
+  buildCommand: "npm run build", // referenced in the "build first" error text
+  defaultCommand: ["eval", "code=app.vault.getName()"], // the `run` subcommand default
+  readyProbe: {
+    // how the launcher confirms the plugin is live; the default is:
+    kind: "eval",
+    code: 'Boolean(app.plugins.plugins["your-plugin"])',
+    match: "=> true",
+  },
+  envPrefix: undefined, // e.g. "YOURPLUGIN" to also emit legacy <PREFIX>_E2E_* aliases during migration
+  profileRoot: "/tmp/your-plugin-obsidian-e2e", // private profile root
+  appName: "Obsidian", // the .app name passed to `open -a`
+  obsidianBin: "obsidian", // the obsidian CLI binary
+};
+```
+
+Requirements are the same as the test helpers: Obsidian installed locally and the
+`obsidian` CLI on `PATH`.
+
+### Subcommands
+
+Wire the bin into the same script names the AGENTS.md playbooks already use:
+
+```jsonc
+{
+  "scripts": {
+    "provision:e2e-vault": "obsidian-e2e provision",
+    "start:e2e-obsidian": "obsidian-e2e start",
+    "stop:e2e-obsidian": "obsidian-e2e stop",
+    "obsidian:e2e": "obsidian-e2e run",
+  },
+}
+```
+
+- `provision` - lay down the worktree-local vault (write `.obsidian` config,
+  symlink the plugin artifacts, seed `data.json`). Pure filesystem; never
+  launches Obsidian.
+- `start` - provision, prepare the private profile, guard the app version, then
+  reuse-and-reload a warm instance or launch a fresh one and verify the plugin.
+- `stop` - terminate this worktree's instance (SIGTERM, then SIGKILL for
+  stragglers) and remove its profile. Safe to run when nothing is up.
+- `run` - bring the instance up, then forward the command after the first
+  non-option token (or after `--`) to the `obsidian` CLI. With no command, the
+  config's `defaultCommand` runs.
+
+```bash
+# Provision only, and load the vault env into the current shell:
+eval "$(pnpm run provision:e2e-vault -- --print-env)"
+
+# Bring an instance up and export its env for a Vitest run:
+eval "$(pnpm run start:e2e-obsidian -- --print-env)"
+
+# Forward a command to the running instance's obsidian CLI:
+pnpm run obsidian:e2e -- eval "code=app.vault.getName()"
+
+# Tear the instance down, and also reap any instance whose worktree is gone:
+pnpm run stop:e2e-obsidian -- --prune
+```
+
+Shared flags: `--vault --root --worktree --data --profile-root --obsidian-app
+--obsidian-bin --config` (value) and `--force --json --help` (boolean).
+Per-subcommand extras: `provision` adds `--print-env`; `start` adds `--print-env
+--no-launch --skip-version-guard`; `stop` adds `--dry-run --prune`; `run` adds
+`--skip-version-guard` and forwards everything after the first non-option token.
+
+### Env contract
+
+Under `--print-env`, `stdout` carries **only** `export` lines (so
+`eval "$(...)"` is safe) and every human message goes to `stderr`. The canonical
+names are always emitted; the legacy `<PREFIX>_E2E_*` aliases are emitted only
+when `envPrefix` is set, so a harness can migrate off its old names at its own
+pace.
+
+| Variable                                                | Emitted by                 | Meaning                                                |
+| ------------------------------------------------------- | -------------------------- | ------------------------------------------------------ |
+| `OBSIDIAN_E2E_VAULT`                                    | `provision`, `start`       | the isolated vault name (harnesses default to `"dev"`) |
+| `OBSIDIAN_E2E_VAULT_PATH`                               | `provision`, `start`       | absolute path to the provisioned vault                 |
+| `OBSIDIAN_E2E_OBSIDIAN_HOME`                            | `start`                    | the private `HOME` for this instance                   |
+| `OBSIDIAN_BIN`                                          | `start`                    | only when a non-default `--obsidian-bin` is set        |
+| `<PREFIX>_E2E_VAULT` / `_VAULT_PATH` / `_OBSIDIAN_HOME` | both, when `envPrefix` set | legacy aliases during migration                        |
+
+### Safety notes
+
+- **Version guard.** `start` and `run` refuse to launch (or to reuse a warm
+  instance across) an Obsidian app-code version below the plugin's
+  `minAppVersion`, and hard-fail reuse when Obsidian updated mid-session (the
+  running renderer no longer matches). Bypass with `--skip-version-guard`.
+- **Secure `/tmp` handling.** The profile root defaults under world-writable
+  `/tmp`. Every path that creates, reads, or removes inside it refuses a
+  symlinked, foreign-owned, or group/other-accessible directory and fails closed
+  rather than following a planted link.
+- **Reaper semantics.** An instance is orphaned once its backing worktree is gone
+  from disk (the signature of a worktree removed on merge). `start`/`run` reap
+  orphans as a self-healing safety net, and `stop --prune` reaps them on demand;
+  a running-but-leaked instance for a live worktree is never reaped.
+
+### Archive-hook cleanup (orca)
+
+When a worktree is archived, stop its instance so nothing leaks. The command is
+best-effort (`|| true`) so archiving never fails on a stale instance:
+
+```yaml
+# orca.yaml
+hooks:
+  archive:
+    - node_modules/.bin/obsidian-e2e stop --worktree "$ORCA_WORKTREE_PATH" || true
+```
+
+### Programmatic API
+
+Everything the bin does is available from `obsidian-e2e/runner` for scripts that
+need to orchestrate instances directly - `loadRunnerConfig`,
+`resolveProvisionOptions`, `provisionVault`, `resolveInstanceOptions`,
+`ensureObsidianInstance`, `stopInstance`, `reapOrphanedInstances`,
+`runObsidianE2ECli`, and the supporting types.
 
 ## Setup
 

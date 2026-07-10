@@ -1,6 +1,27 @@
 import type { ExecResult } from "./types";
 import type { DevEvalErrorPayload } from "./types";
 
+export function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+export function errorHasCode(error: unknown, code: string): boolean {
+  return isRecord(error) && error.code === code;
+}
+
+/** Extract the useful output attached to a rejected child-process command. */
+export function commandErrorMessage(error: unknown): string {
+  if (isRecord(error)) {
+    if (typeof error.stderr === "string" && error.stderr.trim()) {
+      return error.stderr.trim();
+    }
+    if (typeof error.stdout === "string" && error.stdout.trim()) {
+      return error.stdout.trim();
+    }
+  }
+  return error instanceof Error ? error.message : String(error);
+}
+
 export class ObsidianCommandError extends Error {
   readonly result: ExecResult;
 

@@ -9,7 +9,13 @@ export default defineConfig({
   dts: {
     resolver: "tsc",
   },
-  entry: ["src/index.ts", "src/vitest.ts", "src/matchers.ts"],
+  entry: [
+    "src/index.ts",
+    "src/vitest.ts",
+    "src/matchers.ts",
+    "src/runner/index.ts",
+    "src/runner/bin.ts",
+  ],
   exports: false,
   fixedExtension: true,
   format: ["esm"],

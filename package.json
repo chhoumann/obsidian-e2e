@@ -1,6 +1,6 @@
 {
   "name": "obsidian-e2e",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Vitest-first end-to-end test utilities for Obsidian plugins.",
   "homepage": "https://github.com/chhoumann/obsidian-e2e#readme",
   "bugs": {
@@ -11,6 +11,9 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/chhoumann/obsidian-e2e.git"
+  },
+  "bin": {
+    "obsidian-e2e": "./dist/runner/bin.mjs"
   },
   "files": [
     "dist"
@@ -32,6 +35,10 @@
     "./matchers": {
       "types": "./dist/matchers.d.mts",
       "default": "./dist/matchers.mjs"
+    },
+    "./runner": {
+      "types": "./dist/runner/index.d.mts",
+      "default": "./dist/runner/index.mjs"
     },
     "./package.json": "./package.json"
   },
