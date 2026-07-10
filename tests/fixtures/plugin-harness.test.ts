@@ -155,6 +155,25 @@ function drain(events: string[]): string[] {
   return snapshot;
 }
 
+describe("createPluginHarness runner binding", () => {
+  it('imports its lifecycle hooks from "vitest", the consumer\'s runner', async () => {
+    // createPluginHarness registers beforeAll/beforeEach/afterEach/afterAll inside
+    // the *consumer's* test files, which run under the consumer's own vitest. If
+    // those hooks are imported from a different runner instance (e.g.
+    // "vite-plus/test"), they register on a runner that never sees the consumer's
+    // suite, so every file fails at collection with "failed to find the current
+    // suite". Guarding the import specifier keeps the binding correct; the package's
+    // own suite aliases "vitest" to the same vite-plus-test runner, so it stays green.
+    const source = await fs.readFile(
+      path.join(__dirname, "..", "..", "src", "fixtures", "plugin-harness.ts"),
+      "utf8",
+    );
+
+    expect(source).toMatch(/import\s*\{[^}]*\bbeforeAll\b[^}]*\}\s*from\s*"vitest"/u);
+    expect(source).not.toMatch(/\bbeforeAll\b[^\n]*from\s*"vite-plus\/test"/u);
+  });
+});
+
 describe("createPluginHarnessSession", () => {
   it("drives the suite lifecycle in order and restores data before teardown", async () => {
     const fixture = await createHarnessFixture();

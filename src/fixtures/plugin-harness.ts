@@ -1,8 +1,14 @@
 import { readlink } from "node:fs/promises";
 import path from "node:path";
 
-import { afterAll, afterEach, beforeAll, beforeEach } from "vite-plus/test";
-import type { TestContext as VitestTestContext } from "vite-plus/test";
+// Bind to "vitest" (not "vite-plus/test"): createPluginHarness registers these
+// lifecycle hooks in the *consumer's* test files, which run under the consumer's
+// own vitest. Registering on a different runner instance leaves the hooks unable
+// to find the current suite. Inside this package "vitest" is aliased to
+// @voidzero-dev/vite-plus-test (the same runner vite-plus/test re-exports), so
+// the package's own suite stays consistent while dist externalizes "vitest".
+import { afterAll, afterEach, beforeAll, beforeEach } from "vitest";
+import type { TestContext as VitestTestContext } from "vitest";
 
 import type { FailureArtifactTask } from "../artifacts/failure-artifacts";
 import type {

@@ -67,7 +67,13 @@
     "vitest": "npm:@voidzero-dev/vite-plus-test@latest"
   },
   "peerDependencies": {
-    "vite-plus": "^0.1.11"
+    "vite-plus": "^0.1.11",
+    "vitest": ">=3"
+  },
+  "peerDependenciesMeta": {
+    "vitest": {
+      "optional": true
+    }
   },
   "engines": {
     "node": "^20.19.0 || >=22.12.0"
