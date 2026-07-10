@@ -78,6 +78,7 @@ export function resolveInstanceOptions(
     obsidianBin: raw.obsidianBin ?? config.obsidianBin,
     obsidianHome,
     profileRoot,
+    skipVersionGuard: raw.skipVersionGuard ?? false,
     userDataPath,
   };
 }

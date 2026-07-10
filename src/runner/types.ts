@@ -79,6 +79,7 @@ export interface InstanceRawOptions extends ProvisionRawOptions {
   obsidianApp?: string;
   obsidianBin?: string;
   profileRoot?: string;
+  skipVersionGuard?: boolean;
 }
 
 export interface InstanceOptions extends ProvisionOptions {
@@ -89,6 +90,7 @@ export interface InstanceOptions extends ProvisionOptions {
   obsidianBin: string;
   obsidianHome: string;
   profileRoot: string;
+  skipVersionGuard: boolean;
   userDataPath: string;
 }
 
