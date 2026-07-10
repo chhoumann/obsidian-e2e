@@ -1,4 +1,6 @@
+import { execFileSync } from "node:child_process";
 import { promises as fs } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vite-plus/test";
@@ -155,6 +157,27 @@ function drain(events: string[]): string[] {
   return snapshot;
 }
 
+const repoRoot = path.join(__dirname, "..", "..");
+const harnessSource = path.join(repoRoot, "src", "fixtures", "plugin-harness.ts");
+const distVitest = path.join(repoRoot, "dist", "vitest.mjs");
+
+function ensureFreshDist(): void {
+  // Rebuild only when the bundle is missing or older than the inputs that decide
+  // the binding (the harness source and package.json, which owns externalization
+  // via the vitest peer dep). Keeps the common fresh-dist case free while making
+  // the assertion reflect the current source + build config in CI and after edits.
+  if (existsSync(distVitest)) {
+    const distMtime = statSync(distVitest).mtimeMs;
+    const packageJson = path.join(repoRoot, "package.json");
+    const newestInput = Math.max(statSync(harnessSource).mtimeMs, statSync(packageJson).mtimeMs);
+    if (distMtime >= newestInput) {
+      return;
+    }
+  }
+
+  execFileSync("pnpm", ["exec", "vp", "pack"], { cwd: repoRoot, stdio: "ignore" });
+}
+
 describe("createPluginHarness runner binding", () => {
   it('imports its lifecycle hooks from "vitest", the consumer\'s runner', async () => {
     // createPluginHarness registers beforeAll/beforeEach/afterEach/afterAll inside
@@ -164,13 +187,23 @@ describe("createPluginHarness runner binding", () => {
     // suite, so every file fails at collection with "failed to find the current
     // suite". Guarding the import specifier keeps the binding correct; the package's
     // own suite aliases "vitest" to the same vite-plus-test runner, so it stays green.
-    const source = await fs.readFile(
-      path.join(__dirname, "..", "..", "src", "fixtures", "plugin-harness.ts"),
-      "utf8",
-    );
+    const source = await fs.readFile(harnessSource, "utf8");
 
     expect(source).toMatch(/import\s*\{[^}]*\bbeforeAll\b[^}]*\}\s*from\s*"vitest"/u);
     expect(source).not.toMatch(/\bbeforeAll\b[^\n]*from\s*"vite-plus\/test"/u);
+  });
+
+  it('externalizes the lifecycle hooks as "vitest" in the built dist', () => {
+    // The source guard above is not enough on its own: inside this package
+    // "vitest" is aliased to vite-plus-test, so if the vitest peer dep were dropped
+    // vp pack would bundle that runner inline (emitting a local `function beforeAll`)
+    // instead of externalizing the import, silently reintroducing the consumer
+    // breakage. Assert the shipped bundle keeps `from "vitest"` external.
+    ensureFreshDist();
+    const bundled = readFileSync(distVitest, "utf8");
+
+    expect(bundled).toMatch(/import\s*\{[^}]*\bbeforeAll\b[^}]*\}\s*from\s*"vitest"/u);
+    expect(bundled).not.toMatch(/function beforeAll\(/u);
   });
 });
 
