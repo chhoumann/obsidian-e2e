@@ -71,9 +71,14 @@ export function buildEvalJsonCode(code: string): string {
 }
 
 export function buildEvalJsonAsyncCode(code: string): string {
+  // Indirect `eval` parses its argument as a script, where a top-level `await`
+  // is a SyntaxError. Wrapping the caller's code as the expression body of an
+  // async arrow makes `await` valid while still yielding the expression's value,
+  // so both `await load()` and a plain promise-returning expression work.
+  const asyncExpression = `(async()=>(${code}))()`;
   return [
     "(async()=>{",
-    `const __obsidianE2ECode=${JSON.stringify(code)};`,
+    `const __obsidianE2ECode=${JSON.stringify(asyncExpression)};`,
     EVAL_JSON_SERIALIZER,
     "try{",
     "return JSON.stringify({ok:true,value:__obsidianE2ESerialize(await (0,eval)(__obsidianE2ECode))});",

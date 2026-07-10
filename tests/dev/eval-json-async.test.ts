@@ -2,7 +2,11 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { createObsidianClient } from "../../src/core/client";
 import { DevEvalError } from "../../src/core/errors";
-import { buildEvalJsonAsyncCode, runEvalJsonAsync } from "../../src/dev/eval-json";
+import {
+  buildEvalJsonAsyncCode,
+  parseEvalJsonEnvelope,
+  runEvalJsonAsync,
+} from "../../src/dev/eval-json";
 import { createExecResult } from "../helpers/create-exec-result";
 import type { CommandTransport, ObsidianDevHandle } from "../../src/core/types";
 
@@ -25,6 +29,46 @@ describe("buildEvalJsonAsyncCode", () => {
     // Reuses the shared serializer/decoder envelope.
     expect(code).toContain("__obsidianE2ESerialize");
     expect(code).toContain("JSON.stringify({ok:true,value:");
+  });
+
+  it("wraps the caller code so a top-level await parses", () => {
+    // Indirect eval treats its argument as a script, where a bare `await` would
+    // be a SyntaxError; the wrapper turns it into an async arrow expression body.
+    const code = buildEvalJsonAsyncCode("await load()");
+
+    expect(code).toContain(JSON.stringify("(async()=>(await load()))()"));
+  });
+});
+
+// Exercises the generated code in a real JS engine (the stubbed transport tests
+// above never execute it) so the top-level-await path cannot regress silently.
+describe("buildEvalJsonAsyncCode executed", () => {
+  const evalGenerated = async <T>(userCode: string): Promise<T> => {
+    const raw = await (0, eval)(buildEvalJsonAsyncCode(userCode));
+    return parseEvalJsonEnvelope<T>(raw);
+  };
+
+  it("runs a top-level-await body and returns the resolved value", async () => {
+    await expect(evalGenerated("await Promise.resolve({ count: 2 })")).resolves.toEqual({
+      count: 2,
+    });
+  });
+
+  it("runs a promise-returning expression", async () => {
+    await expect(evalGenerated("Promise.resolve('ready')")).resolves.toBe("ready");
+  });
+
+  it("runs an async IIFE expression", async () => {
+    await expect(evalGenerated("(async () => 'done')()")).resolves.toBe("done");
+  });
+
+  it("surfaces a rejected promise as a DevEvalError", async () => {
+    const error = await evalGenerated("Promise.reject(new TypeError('nope'))").catch(
+      (thrown) => thrown,
+    );
+
+    expect(error).toBeInstanceOf(DevEvalError);
+    expect((error as DevEvalError).message).toBe("Failed to evaluate Obsidian code: nope");
   });
 });
 
