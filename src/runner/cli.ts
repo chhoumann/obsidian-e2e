@@ -86,7 +86,7 @@ const STOP_SPEC: ArgsParserSpec = {
 
 const RUN_SPEC: ArgsParserSpec = {
   valueOptions: SHARED_VALUE_OPTIONS,
-  booleanOptions: SHARED_BOOLEAN_OPTIONS,
+  booleanOptions: { ...SHARED_BOOLEAN_OPTIONS, "--skip-version-guard": "skipVersionGuard" },
 };
 
 /** Isolated HOME environment for the forwarded `obsidian` command. */
@@ -509,6 +509,7 @@ function subcommandHelp(subcommand: Subcommand): string {
         "",
         "Flags:",
         SHARED_FLAGS,
+        "  --skip-version-guard    skip the minAppVersion / mid-session update guard",
       ].join("\n");
   }
 }

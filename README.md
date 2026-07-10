@@ -133,8 +133,8 @@ pnpm run stop:e2e-obsidian -- --prune
 Shared flags: `--vault --root --worktree --data --profile-root --obsidian-app
 --obsidian-bin --config` (value) and `--force --json --help` (boolean).
 Per-subcommand extras: `provision` adds `--print-env`; `start` adds `--print-env
---no-launch --skip-version-guard`; `stop` adds `--dry-run --prune`; `run`
-forwards everything after the first non-option token.
+--no-launch --skip-version-guard`; `stop` adds `--dry-run --prune`; `run` adds
+`--skip-version-guard` and forwards everything after the first non-option token.
 
 ### Env contract
 

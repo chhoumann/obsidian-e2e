@@ -173,6 +173,32 @@ describe("run command forwarding", () => {
       "code=app.vault.getName()",
     ]);
   });
+
+  test("accepts --skip-version-guard and threads it into the bring-up", async () => {
+    const worktree = await createTempDir(tempDirectories, "cli-run-guard-");
+    const profileRoot = await createTempDir(tempDirectories, "cli-profile-");
+    let seen: InstanceOptions | undefined;
+    const code = await runObsidianE2ECli(
+      ["run", "--worktree", worktree, "--profile-root", profileRoot, "--skip-version-guard"],
+      {
+        cwd: worktree,
+        stdout: () => {},
+        stderr: () => {},
+        loadRunnerConfig: configLoader({
+          pluginId: "quickadd",
+          defaultCommand: ["eval", "code=1"],
+        }),
+        ensureObsidianInstance: async (options, config) => {
+          seen = options;
+          return stubEnsure(options, config);
+        },
+        reapOrphanedInstances: async () => ({ scanned: 0, reaped: [] }),
+        spawn: makeSpawn({ code: 0, signal: null }),
+      },
+    );
+    expect(code).toBe(0);
+    expect(seen?.skipVersionGuard).toBe(true);
+  });
 });
 
 describe("spawnObsidian", () => {
