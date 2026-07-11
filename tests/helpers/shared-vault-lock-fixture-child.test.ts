@@ -5,7 +5,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { expect, test } from "vite-plus/test";
 
 import { createObsidianTest } from "../../src/vitest";
-import { createExecResult } from "./create-exec-result";
+import { createExecResult, frameEvalPayload } from "./create-exec-result";
 import type { CommandTransport } from "../../src/core/types";
 
 const isChildRun = process.env.OBSIDIAN_E2E_FIXTURE_CHILD === "1";
@@ -100,7 +100,11 @@ function createTransport(): CommandTransport {
     if (command === "eval") {
       const code = String(args.code ?? "");
       await appendFile(getEnv("OBSIDIAN_E2E_EVAL_LOG"), `${code}\n`, "utf8");
-      return createExecResult(request.bin, request.argv, '{"ok":true,"value":true}\n');
+      return createExecResult(
+        request.bin,
+        request.argv,
+        `${frameEvalPayload(String(args.code ?? ""), '{"ok":true,"value":true}')}\n`,
+      );
     }
 
     throw new Error(`Unhandled transport request: ${request.argv.join(" ")}`);

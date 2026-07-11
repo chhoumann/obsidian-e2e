@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 import { DevEvalError } from "../core/errors";
 import type { DevEvalErrorPayload, ExecOptions, ObsidianDevHandle } from "../core/types";
 
@@ -15,6 +17,28 @@ type EvalJsonEnvelope = EvalJsonFailure | EvalJsonSuccess;
 
 interface UndefinedSentinel {
   __obsidianE2EType: "undefined";
+}
+
+/**
+ * Per-call sentinel markers wrapped around the JSON envelope. The eval channel
+ * is shared with whatever the plugin prints while the evaluated code runs, so
+ * any plugin that logs during the exercised operation would otherwise corrupt
+ * the response (`Unexpected token 'Q', "QuickAdd: "... is not valid JSON`).
+ * A fresh nonce per call keeps a marker collision with logged output or with
+ * the serialized value itself out of the failure space.
+ */
+export interface EvalJsonFrame {
+  begin: string;
+  end: string;
+}
+
+export function createEvalJsonFrame(): EvalJsonFrame {
+  const nonce = randomUUID();
+
+  return {
+    begin: `<<obsidian-e2e:${nonce}:begin>>`,
+    end: `<<obsidian-e2e:${nonce}:end>>`,
+  };
 }
 
 // The serializer and the failure branch are shared verbatim by the synchronous
@@ -38,14 +62,23 @@ const EVAL_JSON_SERIALIZER = [
 ].join("");
 
 const EVAL_JSON_FAILURE_BRANCH =
-  "return JSON.stringify({ok:false,error:{message:error instanceof Error?error.message:String(error),name:error instanceof Error?error.name:'Error',stack:error instanceof Error?error.stack:undefined}});";
+  "return __obsidianE2EFrame(JSON.stringify({ok:false,error:{message:error instanceof Error?error.message:String(error),name:error instanceof Error?error.name:'Error',stack:error instanceof Error?error.stack:undefined}}));";
+
+function buildFrameHelper(frame: EvalJsonFrame): string {
+  return `const __obsidianE2EFrame=(payload)=>${JSON.stringify(frame.begin)}+payload+${JSON.stringify(frame.end)};`;
+}
 
 export async function runEvalJson<T>(
   dev: Pick<ObsidianDevHandle, "evalRaw">,
   code: string,
   execOptions: ExecOptions = {},
 ): Promise<T> {
-  return parseEvalJsonEnvelope<T>(await dev.evalRaw(buildEvalJsonCode(code), execOptions));
+  const frame = createEvalJsonFrame();
+
+  return parseEvalJsonEnvelope<T>(
+    await dev.evalRaw(buildEvalJsonCode(code, frame), execOptions),
+    frame,
+  );
 }
 
 export async function runEvalJsonAsync<T>(
@@ -53,16 +86,22 @@ export async function runEvalJsonAsync<T>(
   code: string,
   execOptions: ExecOptions = {},
 ): Promise<T> {
-  return parseEvalJsonEnvelope<T>(await dev.evalRaw(buildEvalJsonAsyncCode(code), execOptions));
+  const frame = createEvalJsonFrame();
+
+  return parseEvalJsonEnvelope<T>(
+    await dev.evalRaw(buildEvalJsonAsyncCode(code, frame), execOptions),
+    frame,
+  );
 }
 
-export function buildEvalJsonCode(code: string): string {
+export function buildEvalJsonCode(code: string, frame: EvalJsonFrame): string {
   return [
     "(()=>{",
     `const __obsidianE2ECode=${JSON.stringify(code)};`,
+    buildFrameHelper(frame),
     EVAL_JSON_SERIALIZER,
     "try{",
-    "return JSON.stringify({ok:true,value:__obsidianE2ESerialize((0,eval)(__obsidianE2ECode))});",
+    "return __obsidianE2EFrame(JSON.stringify({ok:true,value:__obsidianE2ESerialize((0,eval)(__obsidianE2ECode))}));",
     "}catch(error){",
     EVAL_JSON_FAILURE_BRANCH,
     "}",
@@ -70,7 +109,7 @@ export function buildEvalJsonCode(code: string): string {
   ].join("");
 }
 
-export function buildEvalJsonAsyncCode(code: string): string {
+export function buildEvalJsonAsyncCode(code: string, frame: EvalJsonFrame): string {
   // Indirect `eval` parses its argument as a script, where a top-level `await`
   // is a SyntaxError. Wrapping the caller's code as the expression body of an
   // async arrow makes `await` valid while still yielding the expression's value,
@@ -79,9 +118,10 @@ export function buildEvalJsonAsyncCode(code: string): string {
   return [
     "(async()=>{",
     `const __obsidianE2ECode=${JSON.stringify(asyncExpression)};`,
+    buildFrameHelper(frame),
     EVAL_JSON_SERIALIZER,
     "try{",
-    "return JSON.stringify({ok:true,value:__obsidianE2ESerialize(await (0,eval)(__obsidianE2ECode))});",
+    "return __obsidianE2EFrame(JSON.stringify({ok:true,value:__obsidianE2ESerialize(await (0,eval)(__obsidianE2ECode))}));",
     "}catch(error){",
     EVAL_JSON_FAILURE_BRANCH,
     "}",
@@ -99,8 +139,9 @@ export function parseDevEvalOutput<T>(raw: string): T {
   }
 }
 
-export function parseEvalJsonEnvelope<T>(raw: string): T {
-  const envelope = JSON.parse(normalizeEvalOutput(raw)) as EvalJsonEnvelope;
+export function parseEvalJsonEnvelope<T>(raw: string, frame?: EvalJsonFrame): T {
+  const payload = frame ? extractFramedPayload(raw, frame) : normalizeEvalOutput(raw);
+  const envelope = JSON.parse(payload) as EvalJsonEnvelope;
 
   if (!envelope.ok) {
     throw new DevEvalError(`Failed to evaluate Obsidian code: ${envelope.error.message}`, {
@@ -109,6 +150,24 @@ export function parseEvalJsonEnvelope<T>(raw: string): T {
   }
 
   return decodeEvalJsonValue(envelope.value) as T;
+}
+
+function extractFramedPayload(raw: string, frame: EvalJsonFrame): string {
+  // First begin / last end: the envelope is a single write, so the real begin
+  // marker precedes any inner occurrence of the marker text in the serialized
+  // value, and the real end marker follows it. The per-call nonce keeps
+  // surrounding plugin output from ever containing either marker.
+  const beginIndex = raw.indexOf(frame.begin);
+  const endIndex = raw.lastIndexOf(frame.end);
+
+  if (beginIndex === -1 || endIndex < beginIndex + frame.begin.length) {
+    const excerpt = raw.length > 2_000 ? `${raw.slice(0, 2_000)}… (${raw.length} chars)` : raw;
+    throw new Error(
+      `Obsidian eval output did not contain the framed JSON result envelope. Raw output: ${excerpt}`,
+    );
+  }
+
+  return raw.slice(beginIndex + frame.begin.length, endIndex);
 }
 
 function normalizeEvalOutput(raw: string): string {

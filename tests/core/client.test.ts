@@ -8,6 +8,7 @@ import { createObsidianClient } from "../../src/core/client";
 import { DevEvalError } from "../../src/core/errors";
 import { mergeExecOptions } from "../../src/core/exec-options";
 import type { CommandTransport } from "../../src/core/types";
+import { frameEvalPayload } from "../helpers/create-exec-result";
 
 describe("createObsidianClient", () => {
   test("builds obsidian commands with the vault prefix", async () => {
@@ -394,7 +395,7 @@ describe("createObsidianClient", () => {
             command: request.bin,
             exitCode: 0,
             stderr: "",
-            stdout: '{"ok":true,"value":{"frontmatter":{"tags":["daily"]},"headings":[]}}\n',
+            stdout: `${frameEvalPayload(code, '{"ok":true,"value":{"frontmatter":{"tags":["daily"]},"headings":[]}}')}\n`,
           };
         }
 
@@ -404,8 +405,10 @@ describe("createObsidianClient", () => {
             command: request.bin,
             exitCode: 0,
             stderr: "",
-            stdout:
-              '{"ok":true,"value":{"consoleMessages":[{"args":["hello"],"at":1,"level":"log","text":"hello"}],"notices":[{"at":2,"message":"Saved"}],"runtimeErrors":[{"at":3,"message":"boom","source":"error"}]}}\n',
+            stdout: `${frameEvalPayload(
+              code,
+              '{"ok":true,"value":{"consoleMessages":[{"args":["hello"],"at":1,"level":"log","text":"hello"}],"notices":[{"at":2,"message":"Saved"}],"runtimeErrors":[{"at":3,"message":"boom","source":"error"}]}}',
+            )}\n`,
           };
         }
 
@@ -415,7 +418,7 @@ describe("createObsidianClient", () => {
             command: request.bin,
             exitCode: 0,
             stderr: "",
-            stdout: '{"ok":true,"value":true}\n',
+            stdout: `${frameEvalPayload(code, '{"ok":true,"value":true}')}\n`,
           };
         }
 
@@ -425,8 +428,10 @@ describe("createObsidianClient", () => {
             command: request.bin,
             exitCode: 0,
             stderr: "",
-            stdout:
-              '{"ok":true,"value":{"activeFile":"Inbox/Today.md","values":[1,{"nested":"ok"}]}}\n',
+            stdout: `${frameEvalPayload(
+              code,
+              '{"ok":true,"value":{"activeFile":"Inbox/Today.md","values":[1,{"nested":"ok"}]}}',
+            )}\n`,
           };
         }
 
@@ -544,14 +549,16 @@ describe("createObsidianClient", () => {
   });
 
   test("raises remote evalJson failures with remote stack details", async () => {
-    const transport = vi.fn<CommandTransport>().mockResolvedValue({
-      argv: ["vault=dev", "eval"],
-      command: "obsidian",
+    const transport = vi.fn<CommandTransport>().mockImplementation(async (request) => ({
+      argv: request.argv,
+      command: request.bin,
       exitCode: 0,
       stderr: "",
-      stdout:
-        '{"ok":false,"error":{"name":"TypeError","message":"Nope","stack":"TypeError: Nope\\n    at eval"}}\n',
-    });
+      stdout: `${frameEvalPayload(
+        request.argv.find((entry) => entry.startsWith("code=")) ?? "",
+        '{"ok":false,"error":{"name":"TypeError","message":"Nope","stack":"TypeError: Nope\\n    at eval"}}',
+      )}\n`,
+    }));
 
     const client = createObsidianClient({
       transport,
@@ -570,14 +577,16 @@ describe("createObsidianClient", () => {
   });
 
   test("rejects unsupported evalJson values with clear errors", async () => {
-    const transport = vi.fn<CommandTransport>().mockResolvedValue({
-      argv: ["vault=dev", "eval"],
-      command: "obsidian",
+    const transport = vi.fn<CommandTransport>().mockImplementation(async (request) => ({
+      argv: request.argv,
+      command: request.bin,
       exitCode: 0,
       stderr: "",
-      stdout:
-        '{"ok":false,"error":{"name":"Error","message":"Cannot serialize non-plain object at $.value","stack":"Error: Cannot serialize non-plain object at $.value"}}\n',
-    });
+      stdout: `${frameEvalPayload(
+        request.argv.find((entry) => entry.startsWith("code=")) ?? "",
+        '{"ok":false,"error":{"name":"Error","message":"Cannot serialize non-plain object at $.value","stack":"Error: Cannot serialize non-plain object at $.value"}}',
+      )}\n`,
+    }));
 
     const client = createObsidianClient({
       transport,
@@ -594,13 +603,16 @@ describe("createObsidianClient", () => {
   });
 
   test("round-trips undefined through evalJson", async () => {
-    const transport = vi.fn<CommandTransport>().mockResolvedValue({
-      argv: ["vault=dev", "eval"],
-      command: "obsidian",
+    const transport = vi.fn<CommandTransport>().mockImplementation(async (request) => ({
+      argv: request.argv,
+      command: request.bin,
       exitCode: 0,
       stderr: "",
-      stdout: '{"ok":true,"value":{"__obsidianE2EType":"undefined"}}\n',
-    });
+      stdout: `${frameEvalPayload(
+        request.argv.find((entry) => entry.startsWith("code=")) ?? "",
+        '{"ok":true,"value":{"__obsidianE2EType":"undefined"}}',
+      )}\n`,
+    }));
 
     const client = createObsidianClient({
       transport,
@@ -656,10 +668,13 @@ describe("createObsidianClient", () => {
           command: request.bin,
           exitCode: 0,
           stderr: "",
-          stdout: JSON.stringify({
-            ok: true,
-            value: consoleAttempts > 1 ? [{ args: [], at: 1, level: "log", text: "done" }] : [],
-          }),
+          stdout: frameEvalPayload(
+            code,
+            JSON.stringify({
+              ok: true,
+              value: consoleAttempts > 1 ? [{ args: [], at: 1, level: "log", text: "done" }] : [],
+            }),
+          ),
         };
       }
 
@@ -670,10 +685,13 @@ describe("createObsidianClient", () => {
           command: request.bin,
           exitCode: 0,
           stderr: "",
-          stdout: JSON.stringify({
-            ok: true,
-            value: noticeAttempts > 1 ? [{ at: 2, message: "Saved" }] : [],
-          }),
+          stdout: frameEvalPayload(
+            code,
+            JSON.stringify({
+              ok: true,
+              value: noticeAttempts > 1 ? [{ at: 2, message: "Saved" }] : [],
+            }),
+          ),
         };
       }
 
@@ -684,10 +702,13 @@ describe("createObsidianClient", () => {
           command: request.bin,
           exitCode: 0,
           stderr: "",
-          stdout: JSON.stringify({
-            ok: true,
-            value: runtimeErrorAttempts > 1 ? [{ at: 3, message: "boom", source: "error" }] : [],
-          }),
+          stdout: frameEvalPayload(
+            code,
+            JSON.stringify({
+              ok: true,
+              value: runtimeErrorAttempts > 1 ? [{ at: 3, message: "boom", source: "error" }] : [],
+            }),
+          ),
         };
       }
 
@@ -734,7 +755,9 @@ describe("createObsidianClient", () => {
         "const codeArg = argv.find((entry) => entry.startsWith('code=')) ?? '';",
         "const code = codeArg.slice(5);",
         "if (argv[1] !== 'eval') { process.stdout.write(''); process.exit(0); }",
-        'if (code.includes(\'__obsidianE2ESerialize\')) { process.stdout.write(\'{"ok":true,"value":{"ok":true,"items":[1,2]}}\\n\'); process.exit(0); }',
+        "const beginMarker = (code.match(/<<obsidian-e2e:[^:>]+:begin>>/) ?? [''])[0];",
+        "const endMarker = beginMarker.replace(':begin>>', ':end>>');",
+        'if (code.includes(\'__obsidianE2ESerialize\')) { process.stdout.write(`noise before envelope\\n${beginMarker}{"ok":true,"value":{"ok":true,"items":[1,2]}}${endMarker}\\n`); process.exit(0); }',
         "process.stdout.write('=> 2\\n');",
       ].join("\n"),
       "utf8",

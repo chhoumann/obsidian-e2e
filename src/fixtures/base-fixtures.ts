@@ -1,4 +1,4 @@
-import type { TestContext } from "vite-plus/test";
+import type { TestContext } from "vitest";
 
 import { createObsidianClient } from "../core/client";
 import type { ObsidianClient, VaultApi } from "../core/types";
@@ -45,14 +45,36 @@ export function createBaseFixtures(
         });
 
         await vaultLock.publishMarker(lockClient);
+
+        let useFailure: { error: unknown } | undefined;
+
         try {
           await use(vaultLock);
-        } finally {
-          try {
-            await clearVaultRunLockMarker(lockClient);
-          } catch {}
+        } catch (error) {
+          useFailure = { error };
+        }
 
-          await vaultLock.release();
+        // Warn, finish releasing the lock, then fail the suite: a dead eval
+        // path here means Obsidian retains stale ownership metadata, which
+        // must not look like a clean run
+        // (https://github.com/chhoumann/obsidian-e2e/issues/19).
+        let markerClearFailure: { error: unknown } | undefined;
+
+        try {
+          await clearVaultRunLockMarker(lockClient);
+        } catch (error) {
+          markerClearFailure = { error };
+          console.warn("Failed to clear the vault run lock marker during teardown", error);
+        }
+
+        await vaultLock.release();
+
+        if (useFailure) {
+          throw useFailure.error;
+        }
+
+        if (markerClearFailure) {
+          throw markerClearFailure.error;
         }
       },
       { scope: "worker" },

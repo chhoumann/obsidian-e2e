@@ -1,13 +1,13 @@
 import { execFileSync } from "node:child_process";
 import { promises as fs } from "node:fs";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import { createPluginHarnessSession } from "../../src/fixtures/plugin-harness";
 import type { CreatePluginHarnessOptions } from "../../src/fixtures/plugin-harness";
-import { createExecResult } from "../helpers/create-exec-result";
+import { createExecResult, frameEvalPayload } from "../helpers/create-exec-result";
 import { cleanupTempDirectories, createTempDir } from "../helpers/create-temp-dir";
 import type { CommandTransport } from "../../src/core/types";
 
@@ -110,15 +110,17 @@ async function createHarnessFixture(): Promise<HarnessFixture> {
         return createExecResult(
           request.bin,
           request.argv,
-          `${JSON.stringify({ ok: true, value: true })}\n`,
+          `${frameEvalPayload(code, JSON.stringify({ ok: true, value: true }))}\n`,
         );
       }
 
       events.push("eval:evalJson");
+      // Plugin log noise on the eval channel; the framed envelope must survive it
+      // (https://github.com/chhoumann/obsidian-e2e/issues/18).
       return createExecResult(
         request.bin,
         request.argv,
-        `${JSON.stringify({ ok: true, value: true })}\n`,
+        `QuickAdd: (LOG) noisy plugin output\n${frameEvalPayload(code, JSON.stringify({ ok: true, value: true }))}\n`,
       );
     }
 
@@ -158,18 +160,24 @@ function drain(events: string[]): string[] {
 }
 
 const repoRoot = path.join(__dirname, "..", "..");
-const harnessSource = path.join(repoRoot, "src", "fixtures", "plugin-harness.ts");
+const fixturesDir = path.join(repoRoot, "src", "fixtures");
+const harnessSource = path.join(fixturesDir, "plugin-harness.ts");
 const distVitest = path.join(repoRoot, "dist", "vitest.mjs");
 
 function ensureFreshDist(): void {
   // Rebuild only when the bundle is missing or older than the inputs that decide
-  // the binding (the harness source and package.json, which owns externalization
+  // the binding (the fixture sources and package.json, which owns externalization
   // via the vitest peer dep). Keeps the common fresh-dist case free while making
   // the assertion reflect the current source + build config in CI and after edits.
   if (existsSync(distVitest)) {
     const distMtime = statSync(distVitest).mtimeMs;
     const packageJson = path.join(repoRoot, "package.json");
-    const newestInput = Math.max(statSync(harnessSource).mtimeMs, statSync(packageJson).mtimeMs);
+    const newestInput = Math.max(
+      statSync(packageJson).mtimeMs,
+      ...readdirSync(fixturesDir).map(
+        (fileName) => statSync(path.join(fixturesDir, fileName)).mtimeMs,
+      ),
+    );
     if (distMtime >= newestInput) {
       return;
     }
@@ -193,17 +201,32 @@ describe("createPluginHarness runner binding", () => {
     expect(source).not.toMatch(/\bbeforeAll\b[^\n]*from\s*"vite-plus\/test"/u);
   });
 
-  it('externalizes the lifecycle hooks as "vitest" in the built dist', () => {
+  it('createPluginTest/createObsidianTest bind their `test` base to "vitest"', async () => {
+    // Same runner-mismatch class (https://github.com/chhoumann/obsidian-e2e/issues/17):
+    // the returned `test` object carries the runner it was created from, so it
+    // must come from the consumer's vitest, not vite-plus/test.
+    for (const fileName of ["create-plugin-test.ts", "create-obsidian-test.ts"]) {
+      const source = await fs.readFile(path.join(fixturesDir, fileName), "utf8");
+
+      expect(source).toMatch(/import\s*\{\s*test as base\s*\}\s*from\s*"vitest"/u);
+      expect(source).not.toMatch(/from\s*"vite-plus\/test"/u);
+    }
+  });
+
+  it('externalizes the runner as "vitest" in the built dist', () => {
     // The source guard above is not enough on its own: inside this package
     // "vitest" is aliased to vite-plus-test, so if the vitest peer dep were dropped
     // vp pack would bundle that runner inline (emitting a local `function beforeAll`)
     // instead of externalizing the import, silently reintroducing the consumer
-    // breakage. Assert the shipped bundle keeps `from "vitest"` external.
+    // breakage. Assert the shipped bundle keeps `from "vitest"` external and holds
+    // no runtime binding to "vite-plus/test" at all.
     ensureFreshDist();
     const bundled = readFileSync(distVitest, "utf8");
 
     expect(bundled).toMatch(/import\s*\{[^}]*\bbeforeAll\b[^}]*\}\s*from\s*"vitest"/u);
+    expect(bundled).toMatch(/import\s*\{[^}]*\btest\b[^}]*\}\s*from\s*"vitest"/u);
     expect(bundled).not.toMatch(/function beforeAll\(/u);
+    expect(bundled).not.toMatch(/from\s*"vite-plus\/test"/u);
   });
 });
 

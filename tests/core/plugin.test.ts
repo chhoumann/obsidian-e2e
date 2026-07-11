@@ -8,7 +8,7 @@ import {
   createTempDir as createTrackedTempDir,
 } from "../helpers/create-temp-dir";
 import { createStubObsidianClient } from "../helpers/stub-obsidian-client";
-import { createExecResult } from "../helpers/create-exec-result";
+import { createExecResult, frameEvalPayload } from "../helpers/create-exec-result";
 import type { CommandTransport } from "../../src/core/types";
 
 const tempDirectories: string[] = [];
@@ -79,7 +79,7 @@ describe("plugin readiness helpers", () => {
         return createExecResult(
           request.bin,
           request.argv,
-          `${JSON.stringify({ ok: true, value: readyAttempts > 1 })}\n`,
+          `${frameEvalPayload(String(args.code ?? ""), JSON.stringify({ ok: true, value: readyAttempts > 1 }))}\n`,
         );
       }
 
@@ -188,7 +188,7 @@ describe("plugin data ergonomics", () => {
         return createExecResult(
           request.bin,
           request.argv,
-          `${JSON.stringify({ ok: true, value: true })}\n`,
+          `${frameEvalPayload(String(args.code ?? ""), JSON.stringify({ ok: true, value: true }))}\n`,
         );
       }
 
@@ -293,7 +293,7 @@ describe("plugin data ergonomics", () => {
         return createExecResult(
           request.bin,
           request.argv,
-          `${JSON.stringify({ ok: true, value: true })}\n`,
+          `${frameEvalPayload(String(args.code ?? ""), JSON.stringify({ ok: true, value: true }))}\n`,
         );
       }
 
@@ -368,7 +368,7 @@ describe("plugin data ergonomics", () => {
         return createExecResult(
           request.bin,
           request.argv,
-          `${JSON.stringify({ ok: true, value: true })}\n`,
+          `${frameEvalPayload(String(args.code ?? ""), JSON.stringify({ ok: true, value: true }))}\n`,
         );
       }
 

@@ -5,7 +5,7 @@ import path from "node:path";
 import { afterAll, beforeAll, expect } from "vite-plus/test";
 
 import { createObsidianTest } from "../../src/vitest";
-import { createExecResult } from "../helpers/create-exec-result";
+import { createExecResult, frameEvalPayload } from "../helpers/create-exec-result";
 import { createTempDir } from "../helpers/create-temp-dir";
 import type { CommandTransport } from "../../src/core/types";
 
@@ -104,7 +104,11 @@ function createTransport(): CommandTransport {
 
     if (command === "eval") {
       evalCalls.push(String(args.code ?? ""));
-      return createExecResult(request.bin, request.argv, '{"ok":true,"value":true}\n');
+      return createExecResult(
+        request.bin,
+        request.argv,
+        `${frameEvalPayload(String(args.code ?? ""), '{"ok":true,"value":true}')}\n`,
+      );
     }
 
     throw new Error(`Unhandled transport request: ${request.argv.join(" ")}`);

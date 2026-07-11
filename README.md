@@ -561,8 +561,11 @@ Lifecycle: `beforeAll` acquires the vault lock and marker, runs the optional
 symlink preflight, creates the sandbox, then reloads the plugin and waits for the
 ready command plus your `waitUntilReady` predicate. `beforeEach` resets
 diagnostics; `afterEach` runs `beforeDataRestore`, restores `data.json`, and
-re-readies the plugin. `afterAll` runs an ordered, error-aggregating teardown
-that always releases the lock.
+re-readies the plugin. `afterAll` runs an ordered, error-aggregating teardown:
+plugin data restore, then sandbox removal, then in-app lock-marker clear, and
+only then the vault-lock release - so a waiting run never acquires the vault
+mid-cleanup. A failed marker clear fails the suite instead of being swallowed,
+since it means Obsidian retained stale ownership metadata.
 
 `resolveObsidianEnvOptions()` maps the canonical `OBSIDIAN_E2E_VAULT`,
 `OBSIDIAN_E2E_VAULT_PATH`, and `OBSIDIAN_E2E_OBSIDIAN_HOME` env (with an optional
@@ -903,7 +906,11 @@ typed results and remote error details, `obsidian.dev.evalJsonAsync()` when the
 evaluated code is an async body whose resolved value you need (it awaits the
 promise inside Obsidian before serializing the same `{ ok, value }` envelope,
 rethrowing failures as a `DevEvalError` with the remote message and stack), and
-`obsidian.dev.evalRaw()` when you intentionally need the unstructured CLI output. `dev.dom()` and
+`obsidian.dev.evalRaw()` when you intentionally need the unstructured CLI output.
+The `evalJson`/`evalJsonAsync` envelope is wrapped in per-call sentinel markers,
+so plugin console output emitted on the eval channel while the code runs (e.g.
+`QuickAdd: ...` notices) cannot corrupt the parsed result - no window-global
+polling workaround is needed for logging-heavy operations. `dev.dom()` and
 `dev.screenshot()` remain the safer wrappers around the built-in developer CLI
 commands. Screenshot behavior depends on the active desktop environment, so
 start by validating it locally before relying on it in automation.
@@ -938,8 +945,9 @@ start by validating it locally before relying on it in automation.
   synchronization after note writes.
 - Failure artifacts capture active note content, parsed frontmatter, recent
   console/notices/runtime errors, and workspace snapshots.
-- Lifecycle cleanup restores tracked plugin data before disabling plugins and
-  removes sandbox content after teardown.
+- Lifecycle cleanup restores tracked plugin data before disabling plugins,
+  removes sandbox content and clears the in-app lock marker before releasing
+  the vault lock, and surfaces marker-clear failures instead of swallowing them.
 
 ## End-To-End Workflow
 

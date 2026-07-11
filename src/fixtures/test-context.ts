@@ -101,15 +101,22 @@ export async function createInternalTestContext(
             }
           }
 
-          try {
-            await clearVaultRunLockMarker(obsidian);
-          } catch {}
+          // Teardown order (https://github.com/chhoumann/obsidian-e2e/issues/19):
+          // finish deleting sandbox content while the vault is still exclusively
+          // held, then clear the in-app ownership marker, and only then release
+          // the lock - a waiting run must never acquire the vault mid-cleanup.
+          await recordCleanupError(cleanupErrors, async () => sandbox!.cleanup());
+
+          if (vaultLock) {
+            // A failed marker clear is recorded (failing the suite) rather than
+            // swallowed: if the eval path dies here, Obsidian retains stale
+            // ownership metadata and the run must not look clean.
+            await recordCleanupError(cleanupErrors, async () => clearVaultRunLockMarker(obsidian));
+          }
 
           if (ownsVaultLock) {
             await recordCleanupError(cleanupErrors, async () => vaultLock.release());
           }
-
-          await recordCleanupError(cleanupErrors, async () => sandbox!.cleanup());
         }
       }
 
@@ -164,9 +171,16 @@ export async function createInternalTestContext(
         await sandbox.cleanup();
       }
     } finally {
-      try {
-        await clearVaultRunLockMarker(obsidian);
-      } catch {}
+      if (vaultLock) {
+        try {
+          await clearVaultRunLockMarker(obsidian);
+        } catch (markerError) {
+          console.warn(
+            "Failed to clear the vault run lock marker during setup cleanup",
+            markerError,
+          );
+        }
+      }
 
       if (ownsVaultLock) {
         await vaultLock.release();

@@ -8,7 +8,7 @@ import type {
   SandboxApi,
   VaultApi,
 } from "../core/types";
-import type { TestAPI } from "vite-plus/test";
+import type { TestAPI } from "vitest";
 
 export interface SharedVaultLockOptions {
   heartbeatMs?: number;

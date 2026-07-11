@@ -1,4 +1,4 @@
-import type { TestContext } from "vite-plus/test";
+import type { TestContext } from "vitest";
 
 import {
   captureFailureArtifacts,

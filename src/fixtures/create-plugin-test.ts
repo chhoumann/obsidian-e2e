@@ -1,4 +1,5 @@
-import { test as base } from "vite-plus/test";
+// Bind to "vitest" (not "vite-plus/test") - see create-obsidian-test.ts.
+import { test as base } from "vitest";
 
 import { getClientInternals } from "../core/internals";
 import type { ObsidianClient, VaultApi } from "../core/types";

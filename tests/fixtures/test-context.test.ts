@@ -1,10 +1,10 @@
-import { promises as fs } from "node:fs";
+import { existsSync, promises as fs, readdirSync } from "node:fs";
 import path from "node:path";
 
 import { afterEach, describe, expect, test } from "vite-plus/test";
 
 import { createTestContext, withVaultSandbox } from "../../src";
-import { createExecResult } from "../helpers/create-exec-result";
+import { createExecResult, frameEvalPayload } from "../helpers/create-exec-result";
 import type { CommandTransport } from "../../src/core/types";
 import {
   cleanupTempDirectories,
@@ -98,6 +98,77 @@ describe("test context", () => {
     await expect(context.cleanup()).rejects.toThrow("disable failed");
     await expect(fs.access(path.join(vaultRoot, sandboxRoot))).rejects.toThrow();
   });
+  test("cleanup deletes the sandbox before clearing the marker and releasing the lock", async () => {
+    // https://github.com/chhoumann/obsidian-e2e/issues/19: a waiting run must
+    // never acquire the vault while the previous run is still deleting content.
+    const vaultRoot = await createVaultRoot("obsidian-e2e-context-teardown-order-");
+    const lockRoot = await createVaultRoot("obsidian-e2e-context-lock-");
+    let sandboxPath = "";
+    let sandboxExistedAtMarkerClear: boolean | undefined;
+    let lockHeldAtMarkerClear: boolean | undefined;
+
+    const context = await createTestContext({
+      sharedVaultLock: { lockRoot },
+      testName: "Teardown order",
+      transport: createTransport(vaultRoot, [], {
+        onEval(code) {
+          if (code.includes("delete window.__obsidianE2ELock")) {
+            sandboxExistedAtMarkerClear = existsSync(sandboxPath);
+            lockHeldAtMarkerClear = readdirSync(lockRoot).length === 1;
+          }
+        },
+      }),
+      vault: "dev",
+    });
+
+    sandboxPath = path.join(vaultRoot, context.sandbox.root);
+    await context.sandbox.write("inside.md", "inside");
+    await context.cleanup();
+
+    // Sandbox content was already gone and the lock was still held when the
+    // in-app marker was cleared; the lock is released last.
+    expect(sandboxExistedAtMarkerClear).toBe(false);
+    expect(lockHeldAtMarkerClear).toBe(true);
+    expect(readdirSync(lockRoot)).toHaveLength(0);
+  });
+
+  test("cleanup surfaces marker-clear failures and still releases the lock", async () => {
+    const vaultRoot = await createVaultRoot("obsidian-e2e-context-marker-failure-");
+    const lockRoot = await createVaultRoot("obsidian-e2e-context-lock-failure-");
+
+    const context = await createTestContext({
+      sharedVaultLock: { lockRoot },
+      testName: "Marker failure",
+      transport: createTransport(vaultRoot, [], { failMarkerClear: true }),
+      vault: "dev",
+    });
+
+    await context.sandbox.write("inside.md", "inside");
+    const sandboxRoot = context.sandbox.root;
+
+    await expect(context.cleanup()).rejects.toThrow("marker clear failed");
+    await expect(fs.access(path.join(vaultRoot, sandboxRoot))).rejects.toThrow();
+    expect(readdirSync(lockRoot)).toHaveLength(0);
+  });
+
+  test("cleanup without a shared vault lock never touches the in-app marker", async () => {
+    const vaultRoot = await createVaultRoot("obsidian-e2e-context-no-lock-");
+    const evalCodes: string[] = [];
+
+    const context = await createTestContext({
+      testName: "No lock",
+      transport: createTransport(vaultRoot, [], {
+        onEval(code) {
+          evalCodes.push(code);
+        },
+      }),
+      vault: "dev",
+    });
+
+    await context.cleanup();
+
+    expect(evalCodes.some((code) => code.includes("delete window.__obsidianE2ELock"))).toBe(false);
+  });
 });
 
 async function createVaultRoot(prefix: string): Promise<string> {
@@ -107,7 +178,11 @@ async function createVaultRoot(prefix: string): Promise<string> {
 function createTransport(
   vaultRoot: string,
   transportCalls: string[][],
-  options: { failDisable?: boolean } = {},
+  options: {
+    failDisable?: boolean;
+    failMarkerClear?: boolean;
+    onEval?: (code: string) => void;
+  } = {},
 ): CommandTransport {
   let enabled = false;
 
@@ -151,7 +226,18 @@ function createTransport(
     }
 
     if (command === "eval") {
-      return createExecResult(request.bin, request.argv, '{"ok":true,"value":true}\n');
+      const code = String(args.code ?? "");
+      options.onEval?.(code);
+
+      if (options.failMarkerClear && code.includes("delete window.__obsidianE2ELock")) {
+        throw new Error("marker clear failed");
+      }
+
+      return createExecResult(
+        request.bin,
+        request.argv,
+        `${frameEvalPayload(String(args.code ?? ""), '{"ok":true,"value":true}')}\n`,
+      );
     }
 
     throw new Error(`Unhandled transport request: ${request.argv.join(" ")}`);
