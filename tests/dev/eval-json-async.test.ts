@@ -1,181 +1,272 @@
-import { describe, expect, it } from "vite-plus/test";
+import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import { createObsidianClient } from "../../src/core/client";
-import { DevEvalError } from "../../src/core/errors";
 import {
-  buildEvalJsonAsyncCode,
+  DevEvalAsyncError,
+  DevEvalError,
+  ObsidianCommandError,
+  ObsidianCommandTimeoutError,
+} from "../../src/core/errors";
+import {
+  buildEvalJsonAsyncCleanupCode,
+  buildEvalJsonAsyncKickoffCode,
+  buildEvalJsonAsyncPollCode,
   createEvalJsonFrame,
   parseEvalJsonEnvelope,
   runEvalJsonAsync,
 } from "../../src/dev/eval-json";
 import { createExecResult, frameEvalPayload } from "../helpers/create-exec-result";
-import type { CommandTransport, ObsidianDevHandle } from "../../src/core/types";
+import type { CommandTransport, ExecOptions, ObsidianDevHandle } from "../../src/core/types";
 
-function stubDev(
-  evalRaw: (code: string) => Promise<string> | string,
-): Pick<ObsidianDevHandle, "evalRaw"> {
-  return {
-    async evalRaw(code) {
-      return evalRaw(code);
-    },
-  };
+const REGISTRY = "__obsidianE2EAsyncEvals";
+
+afterEach(() => {
+  delete (globalThis as Record<string, unknown>)[REGISTRY];
+});
+
+function registryEntries(): Record<string, { state: string }> {
+  return ((globalThis as Record<string, unknown>)[REGISTRY] ?? {}) as Record<
+    string,
+    { state: string }
+  >;
 }
 
-describe("buildEvalJsonAsyncCode", () => {
-  it("emits an async IIFE that awaits the evaluated code", () => {
-    const code = buildEvalJsonAsyncCode("app.foo()", createEvalJsonFrame());
+type CommandBehavior = "drop-reply" | "fail-undelivered" | undefined;
 
-    expect(code.startsWith("(async()=>{")).toBe(true);
+interface EmulatedCommand {
+  behavior: CommandBehavior;
+  code: string;
+  execOptions: ExecOptions;
+  index: number;
+}
+
+/**
+ * Emulates the in-app side of the protocol by actually executing the generated
+ * eval code in this process, so kickoff/poll/cleanup operate on a real
+ * `globalThis` registry. `drop-reply` executes the command and then throws
+ * (delivered, reply lost); `fail-undelivered` throws the CLI connect failure
+ * without executing.
+ */
+function createInAppEmulator(
+  onCommand: (command: Omit<EmulatedCommand, "behavior">) => CommandBehavior = () => undefined,
+) {
+  const commands: EmulatedCommand[] = [];
+  const dev: Pick<ObsidianDevHandle, "evalRaw"> = {
+    async evalRaw(code, execOptions: ExecOptions = {}) {
+      const command = { code, execOptions, index: commands.length };
+      const behavior = onCommand(command);
+      commands.push({ ...command, behavior });
+
+      if (behavior === "fail-undelivered") {
+        throw new ObsidianCommandError("Obsidian command failed with exit code 1: obsidian eval", {
+          argv: ["eval"],
+          command: "obsidian",
+          exitCode: 1,
+          stderr:
+            "The CLI is unable to find Obsidian. Please make sure Obsidian is running and try again.\n",
+          stdout: "",
+        });
+      }
+
+      const output = (await (0, eval)(code)) as string;
+
+      if (behavior === "drop-reply") {
+        throw new ObsidianCommandTimeoutError("obsidian", ["eval"], 10);
+      }
+
+      return output;
+    },
+  };
+
+  return { commands, dev };
+}
+
+describe("buildEvalJsonAsyncKickoffCode", () => {
+  it("registers the nonce, starts the awaited code, and returns immediately", () => {
+    const frame = createEvalJsonFrame();
+    const code = buildEvalJsonAsyncKickoffCode("app.foo()", frame, "nonce-1");
+
+    expect(code).toContain(`globalThis.${REGISTRY}`);
+    expect(code).toContain(JSON.stringify("nonce-1"));
+    expect(code).toContain("{state:'pending'}");
     expect(code).toContain("await (0,eval)(__obsidianE2ECode)");
-    // Reuses the shared serializer/decoder envelope.
-    expect(code).toContain("__obsidianE2ESerialize");
-    expect(code).toContain("JSON.stringify({ok:true,value:");
+    expect(code).toContain(JSON.stringify(frame.begin));
+    expect(code).toContain(JSON.stringify(frame.end));
   });
 
   it("wraps the caller code so a top-level await parses", () => {
     // Indirect eval treats its argument as a script, where a bare `await` would
     // be a SyntaxError; the wrapper turns it into an async arrow expression body.
-    const code = buildEvalJsonAsyncCode("await load()", createEvalJsonFrame());
+    const code = buildEvalJsonAsyncKickoffCode("await load()", createEvalJsonFrame(), "n");
 
     expect(code).toContain(JSON.stringify("(async()=>(await load()))()"));
   });
-
-  it("embeds the per-call frame markers around the envelope", () => {
-    const frame = createEvalJsonFrame();
-    const code = buildEvalJsonAsyncCode("app.foo()", frame);
-
-    expect(code).toContain(JSON.stringify(frame.begin));
-    expect(code).toContain(JSON.stringify(frame.end));
-  });
 });
 
-// Exercises the generated code in a real JS engine (the stubbed transport tests
-// above never execute it) so the top-level-await path cannot regress silently.
-describe("buildEvalJsonAsyncCode executed", () => {
-  const evalGenerated = async <T>(userCode: string): Promise<T> => {
-    const frame = createEvalJsonFrame();
-    const raw = await (0, eval)(buildEvalJsonAsyncCode(userCode, frame));
-    return parseEvalJsonEnvelope<T>(raw, frame);
-  };
+describe("runEvalJsonAsync", () => {
+  it("resolves the awaited value and cleans up the registry entry", async () => {
+    const { commands, dev } = createInAppEmulator();
 
-  it("runs a top-level-await body and returns the resolved value", async () => {
-    await expect(evalGenerated("await Promise.resolve({ count: 2 })")).resolves.toEqual({
-      count: 2,
-    });
+    await expect(
+      runEvalJsonAsync(dev, "await Promise.resolve({ count: 2, items: [1, 2] })"),
+    ).resolves.toEqual({ count: 2, items: [1, 2] });
+
+    // kickoff + poll + cleanup, every command a short read/write.
+    expect(commands.length).toBeGreaterThanOrEqual(3);
+    expect(commands.at(-1)?.code).toContain("delete registry[");
+    expect(Object.keys(registryEntries())).toHaveLength(0);
   });
 
-  it("runs a promise-returning expression", async () => {
-    await expect(evalGenerated("Promise.resolve('ready')")).resolves.toBe("ready");
+  it("resolves an undefined result through the sentinel", async () => {
+    const { dev } = createInAppEmulator();
+
+    await expect(runEvalJsonAsync(dev, "await Promise.resolve(undefined)")).resolves.toBe(
+      undefined,
+    );
   });
 
-  it("runs an async IIFE expression", async () => {
-    await expect(evalGenerated("(async () => 'done')()")).resolves.toBe("done");
-  });
+  it("surfaces a rejected promise as a DevEvalError with the remote stack", async () => {
+    const { dev } = createInAppEmulator();
 
-  it("surfaces a rejected promise as a DevEvalError", async () => {
-    const error = await evalGenerated("Promise.reject(new TypeError('nope'))").catch(
+    const error = await runEvalJsonAsync(dev, "Promise.reject(new TypeError('nope'))").catch(
       (thrown) => thrown,
     );
 
     expect(error).toBeInstanceOf(DevEvalError);
     expect((error as DevEvalError).message).toBe("Failed to evaluate Obsidian code: nope");
+    expect((error as DevEvalError).remote.name).toBe("TypeError");
+    expect((error as DevEvalError).remote.stack).toContain("TypeError: nope");
   });
-});
 
-describe("runEvalJsonAsync", () => {
-  it("resolves the awaited value from a success envelope", async () => {
-    const dev = stubDev((code) =>
-      frameEvalPayload(code, JSON.stringify({ ok: true, value: { count: 2, items: [1, 2] } })),
+  it("stores a serialization failure as an error envelope at completion time", async () => {
+    const { dev } = createInAppEmulator();
+
+    await expect(runEvalJsonAsync(dev, "Promise.resolve(() => 1)")).rejects.toThrowError(
+      /Cannot serialize function/,
     );
+  });
 
-    await expect(runEvalJsonAsync(dev, "await load()")).resolves.toEqual({
-      count: 2,
-      items: [1, 2],
+  it("recovers the result when the kickoff reply is lost (delivered, reply dropped)", async () => {
+    (globalThis as Record<string, unknown>).__runs = 0;
+    const { dev } = createInAppEmulator(({ index }) => (index === 0 ? "drop-reply" : undefined));
+
+    await expect(
+      runEvalJsonAsync(dev, "(globalThis.__runs++, await Promise.resolve('recovered'))"),
+    ).resolves.toBe("recovered");
+    expect((globalThis as Record<string, unknown>).__runs).toBe(1);
+    delete (globalThis as Record<string, unknown>).__runs;
+  });
+
+  it("recovers when a poll reply is lost", async () => {
+    const { dev } = createInAppEmulator(({ index }) => (index === 1 ? "drop-reply" : undefined));
+
+    await expect(runEvalJsonAsync(dev, "await Promise.resolve('polled')")).resolves.toBe("polled");
+  });
+
+  it("fails with reason 'still-pending' when the promise never settles", async () => {
+    const { dev } = createInAppEmulator();
+
+    const error = await runEvalJsonAsync(dev, "new Promise(() => {})", {
+      timeoutMs: 450,
+    }).catch((thrown) => thrown);
+
+    expect(error).toBeInstanceOf(DevEvalAsyncError);
+    expect((error as DevEvalAsyncError).reason).toBe("still-pending");
+    // The operation is still registered; the message names the nonce for inspection.
+    expect((error as DevEvalAsyncError).message).toContain((error as DevEvalAsyncError).nonce);
+  });
+
+  it("fails with reason 'context-reset' when the registry vanishes after confirmation", async () => {
+    const { dev } = createInAppEmulator(({ index }) => {
+      if (index === 1) {
+        // Simulate an app/vault reload wiping the renderer between commands.
+        delete (globalThis as Record<string, unknown>)[REGISTRY];
+      }
+      return undefined;
     });
+
+    const error = await runEvalJsonAsync(dev, "new Promise(() => {})").catch((thrown) => thrown);
+
+    expect(error).toBeInstanceOf(DevEvalAsyncError);
+    expect((error as DevEvalAsyncError).reason).toBe("context-reset");
   });
 
-  it("decodes the undefined sentinel", async () => {
-    const dev = stubDev((code) =>
-      frameEvalPayload(
-        code,
-        JSON.stringify({ ok: true, value: { done: { __obsidianE2EType: "undefined" } } }),
-      ),
+  it("fails with reason 'ambiguous-delivery' and never reruns when kickoff delivery is unknown", async () => {
+    (globalThis as Record<string, unknown>).__runs = 0;
+    // The kickoff times out without ever executing; polls legitimately find nothing.
+    const dev: Pick<ObsidianDevHandle, "evalRaw"> = {
+      async evalRaw(code) {
+        if (code.includes("{state:'pending'}")) {
+          throw new ObsidianCommandTimeoutError("obsidian", ["eval"], 10);
+        }
+        return (0, eval)(code) as string;
+      },
+    };
+
+    const error = await runEvalJsonAsync(dev, "globalThis.__runs++", { timeoutMs: 450 }).catch(
+      (thrown) => thrown,
     );
 
-    await expect(runEvalJsonAsync(dev, "await noop()")).resolves.toEqual({ done: undefined });
+    expect(error).toBeInstanceOf(DevEvalAsyncError);
+    expect((error as DevEvalAsyncError).reason).toBe("ambiguous-delivery");
+    expect((globalThis as Record<string, unknown>).__runs).toBe(0);
+    delete (globalThis as Record<string, unknown>).__runs;
   });
 
-  it("surfaces a thrown error with message and remote stack", async () => {
-    const dev = stubDev((code) =>
-      frameEvalPayload(
-        code,
-        JSON.stringify({
-          ok: false,
-          error: { message: "boom", name: "TypeError", stack: "TypeError: boom\n    at eval" },
-        }),
-      ),
+  it("reports 'ambiguous-delivery' with the connect failure as cause when the CLI never connects", async () => {
+    (globalThis as Record<string, unknown>).__runs = 0;
+    const { dev } = createInAppEmulator(() => "fail-undelivered");
+
+    const error = await runEvalJsonAsync(dev, "globalThis.__runs++", { timeoutMs: 350 }).catch(
+      (thrown) => thrown,
     );
 
-    const error = await runEvalJsonAsync(dev, "await fail()").catch((thrown) => thrown);
+    expect(error).toBeInstanceOf(DevEvalAsyncError);
+    expect((error as DevEvalAsyncError).reason).toBe("ambiguous-delivery");
+    expect((error as DevEvalAsyncError).message).toContain(
+      "kickoff command failed or its reply was lost",
+    );
+    expect((error as DevEvalAsyncError).causeError).toBeInstanceOf(ObsidianCommandError);
+    // The kickoff is never resent, so the code cannot have run.
+    expect((globalThis as Record<string, unknown>).__runs).toBe(0);
+    delete (globalThis as Record<string, unknown>).__runs;
+  });
 
-    expect(error).toBeInstanceOf(DevEvalError);
-    expect((error as DevEvalError).message).toBe("Failed to evaluate Obsidian code: boom");
-    expect((error as DevEvalError).remote.stack).toBe("TypeError: boom\n    at eval");
-    expect((error as DevEvalError).stack).toContain("TypeError: boom\n    at eval");
+  it("parses kickoff and poll replies surrounded by plugin log noise", async () => {
+    const emulator = createInAppEmulator();
+    const dev: Pick<ObsidianDevHandle, "evalRaw"> = {
+      async evalRaw(code, execOptions) {
+        const output = await emulator.dev.evalRaw(code, execOptions);
+        return `QuickAdd: (LOG) Applying template\n${output}\nMetaEdit: trailing logger output`;
+      },
+    };
+
+    await expect(
+      runEvalJsonAsync(dev, "await Promise.resolve({ path: 'note.md' })"),
+    ).resolves.toEqual({ path: "note.md" });
   });
 });
 
-// Regression for https://github.com/chhoumann/obsidian-e2e/issues/18: the eval
-// channel is shared with whatever the plugin prints while the evaluated code
-// runs (e.g. "QuickAdd: ..." notices), which used to corrupt the JSON envelope.
-describe("runEvalJsonAsync with plugin output on the eval channel", () => {
-  it("parses the envelope surrounded by plugin log noise", async () => {
-    const dev = stubDev((code) =>
-      [
-        "QuickAdd: (LOG) Applying template to active file",
-        frameEvalPayload(code, JSON.stringify({ ok: true, value: { path: "note.md" } })),
-        "MetaEdit: trailing logger output",
-      ].join("\n"),
-    );
+describe("buildEvalJsonAsyncPollCode / buildEvalJsonAsyncCleanupCode", () => {
+  it("reads and deletes exactly the nonce entry", () => {
+    (globalThis as Record<string, unknown>)[REGISTRY] = {
+      keep: { state: "pending" },
+      mine: { envelope: { ok: true, value: 1 }, state: "done" },
+    };
 
-    await expect(runEvalJsonAsync(dev, "await apply()")).resolves.toEqual({ path: "note.md" });
-  });
+    expect((0, eval)(buildEvalJsonAsyncPollCode("mine"))).toEqual({
+      envelope: { ok: true, value: 1 },
+      state: "done",
+    });
+    expect((0, eval)(buildEvalJsonAsyncPollCode("missing"))).toBe(null);
 
-  it("parses an error envelope surrounded by plugin log noise", async () => {
-    const dev = stubDev((code) =>
-      [
-        "QuickAdd: (ERROR) template failed",
-        frameEvalPayload(
-          code,
-          JSON.stringify({ ok: false, error: { message: "boom", name: "Error" } }),
-        ),
-      ].join("\n"),
-    );
-
-    await expect(runEvalJsonAsync(dev, "await fail()")).rejects.toThrowError(
-      "Failed to evaluate Obsidian code: boom",
-    );
-  });
-
-  it("parses when the serialized value itself contains the frame marker text", async () => {
-    const frame = createEvalJsonFrame();
-    const value = { echo: `${frame.begin} inside ${frame.end}` };
-    const raw = `noise\n${frame.begin}${JSON.stringify({ ok: true, value })}${frame.end}\n`;
-
-    expect(parseEvalJsonEnvelope(raw, frame)).toEqual(value);
-  });
-
-  it("reports a clear error when the framed envelope is missing entirely", async () => {
-    const dev = stubDev(() => "QuickAdd: only log output, no envelope");
-
-    await expect(runEvalJsonAsync(dev, "await apply()")).rejects.toThrowError(
-      /did not contain the framed JSON result envelope/,
-    );
+    expect((0, eval)(buildEvalJsonAsyncCleanupCode("mine"))).toBe(true);
+    expect(Object.keys(registryEntries())).toEqual(["keep"]);
   });
 });
 
 describe("obsidian.dev.evalJsonAsync", () => {
-  it("passes the async builder output through evalRaw and decodes the envelope", async () => {
+  it("runs the kickoff-and-poll protocol through the client transport", async () => {
     const evalCodes: string[] = [];
     const transport: CommandTransport = async (request) => {
       if (request.argv[0] === "--help") {
@@ -199,11 +290,8 @@ describe("obsidian.dev.evalJsonAsync", () => {
       if (command === "eval") {
         const code = args.code ?? "";
         evalCodes.push(code);
-        return createExecResult(
-          request.bin,
-          request.argv,
-          `${frameEvalPayload(code, JSON.stringify({ ok: true, value: "ready" }))}\n`,
-        );
+        const output = (await (0, eval)(code)) as string;
+        return createExecResult(request.bin, request.argv, `${output}\n`);
       }
 
       throw new Error(`Unhandled transport request: ${request.argv.join(" ")}`);
@@ -214,7 +302,56 @@ describe("obsidian.dev.evalJsonAsync", () => {
     await expect(
       obsidian.dev.evalJsonAsync<string>("await Promise.resolve('ready')"),
     ).resolves.toBe("ready");
-    expect(evalCodes).toHaveLength(1);
+
+    // kickoff + at least one poll + cleanup - never a single held command.
+    expect(evalCodes.length).toBeGreaterThanOrEqual(3);
     expect(evalCodes[0]).toContain("await (0,eval)(__obsidianE2ECode)");
+    expect(evalCodes[1]).toContain(REGISTRY);
+  });
+
+  it("propagates default env/cwd to every protocol command and honors the default timeout as deadline", async () => {
+    const seen: { cwd?: string; env?: NodeJS.ProcessEnv; timeoutMs?: number }[] = [];
+    const transport: CommandTransport = async (request) => {
+      const [, command, ...rest] = request.argv;
+      if (command === "eval") {
+        seen.push({ cwd: request.cwd, env: request.env, timeoutMs: request.timeoutMs });
+        const code = rest.find((entry) => entry.startsWith("code="))?.slice(5) ?? "";
+        const output = (await (0, eval)(code)) as string;
+        return createExecResult(request.bin, request.argv, `${output}\n`);
+      }
+      return createExecResult(request.bin, request.argv, "");
+    };
+
+    const obsidian = createObsidianClient({
+      defaultExecOptions: { cwd: "/work", env: { HOME: "/private-home" }, timeoutMs: 700 },
+      transport,
+      vault: "dev",
+    });
+
+    const error = await obsidian.dev
+      .evalJsonAsync("new Promise(() => {})")
+      .catch((thrown) => thrown);
+
+    // The default timeoutMs bounds the whole protocol, not one command.
+    expect(error).toBeInstanceOf(DevEvalAsyncError);
+    expect((error as DevEvalAsyncError).reason).toBe("still-pending");
+    expect(seen.length).toBeGreaterThanOrEqual(2);
+    for (const command of seen) {
+      expect(command.cwd).toBe("/work");
+      expect(command.env?.HOME).toBe("/private-home");
+      expect(command.timeoutMs).toBeLessThanOrEqual(700);
+    }
+  });
+});
+
+describe("frameEvalPayload compatibility", () => {
+  it("still frames synchronous evalJson payloads for stubbed transports", () => {
+    const frame = createEvalJsonFrame();
+    const framed = frameEvalPayload(
+      `prefix ${frame.begin} suffix`,
+      JSON.stringify({ ok: true, value: 1 }),
+    );
+
+    expect(parseEvalJsonEnvelope<number>(framed, frame)).toBe(1);
   });
 });

@@ -125,7 +125,9 @@ export function createObsidianClient(options: CreateObsidianClientOptions): Obsi
       return runEvalJson<T>(this, code, execOptions);
     },
     async evalJsonAsync<T = unknown>(code: string, execOptions: ExecOptions = {}) {
-      return runEvalJsonAsync<T>(this, code, execOptions);
+      // The merged timeoutMs is the overall deadline for the kickoff-and-poll
+      // protocol; each internal CLI command stays on its own short budget.
+      return runEvalJsonAsync<T>(this, code, mergeExecOptions(defaultExecOptions, execOptions));
     },
     async evalRaw(code: string, execOptions: ExecOptions = {}) {
       return client.execText(

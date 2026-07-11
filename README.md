@@ -903,9 +903,7 @@ test("inspects live UI state", async ({ obsidian }) => {
 `obsidian.dev.eval()` remains the low-level escape hatch and preserves the raw
 CLI parsing behavior. Use `obsidian.dev.evalJson()` when you want JSON-safe
 typed results and remote error details, `obsidian.dev.evalJsonAsync()` when the
-evaluated code is an async body whose resolved value you need (it awaits the
-promise inside Obsidian before serializing the same `{ ok, value }` envelope,
-rethrowing failures as a `DevEvalError` with the remote message and stack), and
+evaluated code is an async body whose resolved value you need, and
 `obsidian.dev.evalRaw()` when you intentionally need the unstructured CLI output.
 The `evalJson`/`evalJsonAsync` envelope is wrapped in per-call sentinel markers,
 so plugin console output emitted on the eval channel while the code runs (e.g.
@@ -914,6 +912,39 @@ polling workaround is needed for logging-heavy operations. `dev.dom()` and
 `dev.screenshot()` remain the safer wrappers around the built-in developer CLI
 commands. Screenshot behavior depends on the active desktop environment, so
 start by validating it locally before relying on it in automation.
+
+### How `evalJsonAsync` awaits long operations
+
+A single `obsidian eval` CLI command holds one socket request open for the whole
+lifetime of an awaited promise, and its reply is the only carrier of the result:
+a timeout kill or a renderer reload mid-eval loses the value forever even when
+the operation itself completed (#21). `evalJsonAsync` therefore never holds a
+long command open. It sends a short kickoff command exactly once - the command
+starts the operation and records its eventual `{ ok, value }` envelope under a
+per-operation nonce inside the app - then retrieves the envelope with short
+idempotent poll reads. A lost reply is recovered by simply reading again, and
+because the kickoff is never resent, the evaluated code cannot run twice.
+
+`timeoutMs` (per call or via `defaultExecOptions`) is the overall deadline for
+the awaited result; each internal CLI command runs on its own short budget.
+Successful results resolve the value and rethrow in-app failures as
+`DevEvalError`, exactly as before. When the result cannot be produced, the call
+throws `DevEvalAsyncError` whose `reason` names the precise transport state
+instead of a generic timeout:
+
+- `ambiguous-delivery`: the kickoff command failed or its reply was lost, and
+  no in-app record of the operation appeared before the deadline; it may or may
+  not have started. The kickoff is never resent, preserving exactly-once
+  execution; the underlying CLI failure is attached as `causeError`.
+- `context-reset`: the operation was confirmed running and then the eval
+  context was wiped (e.g. an app or vault reload); the result was discarded
+  with the previous context.
+- `still-pending`: the awaited promise has not settled within the deadline; the
+  operation may still complete in-app afterwards.
+
+Hand-rolled fire-and-poll loops (a `window` global plus repeated short
+`evalJson` reads) are obsolete: `evalJsonAsync` is that pattern, managed by the
+package.
 
 ## Layer Boundaries
 

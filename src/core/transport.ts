@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 
-import { ObsidianCommandError } from "./errors";
+import { ObsidianCommandError, ObsidianCommandTimeoutError } from "./errors";
 import type { CommandTransport, ExecuteRequest, ExecResult } from "./types";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -30,10 +30,12 @@ export const executeCommand: CommandTransport = async ({
     stderrChunks.push(Buffer.from(chunk));
   });
 
+  // Executor form on purpose: `Promise.withResolvers` is ES2024/Node >= 22,
+  // and the package's engines floor is Node ^20.19.0.
   const exitCode = await new Promise<number>((resolve, reject) => {
     const timer = setTimeout(() => {
       child.kill("SIGTERM");
-      reject(new Error(`Command timed out after ${timeoutMs}ms: ${bin} ${argv.join(" ")}`));
+      reject(new ObsidianCommandTimeoutError(bin, argv, timeoutMs));
     }, timeoutMs);
 
     child.on("error", (error) => {
