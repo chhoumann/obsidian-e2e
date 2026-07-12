@@ -236,6 +236,78 @@ for (const scenario of scenarios) {
   });
 }
 
+describe("app.json enforced config", () => {
+  const config = makeConfig();
+
+  async function provisionInto(root: string, worktree: string) {
+    const options = resolveProvisionOptions(
+      { root, vault: `${config.pluginId}-app-json`, worktree },
+      config,
+    );
+    const result = await provisionVault(options, config);
+    return path.join(result.vaultPath, ".obsidian", "app.json");
+  }
+
+  test("seeds app.json with exactly the enforced config", async () => {
+    const root = await createTempDir(tempDirectories, "provision-root-");
+    const worktree = await createTempDir(tempDirectories, "provision-worktree-");
+    await seedWorktree(worktree, config.pluginArtifacts, "a");
+
+    const appJsonPath = await provisionInto(root, worktree);
+
+    expect(JSON.parse(await fs.readFile(appJsonPath, "utf8"))).toEqual({
+      settingsPopoutWindow: false,
+      spellcheck: false,
+      trashOption: "local",
+    });
+  });
+
+  test("re-forces enforced keys on reprovision, preserving other keys", async () => {
+    // Vaults provisioned before these Obsidian defaults existed carry an
+    // app.json without the keys (or with them drifted back to the Obsidian
+    // defaults); the next provision must correct every enforced key without
+    // dropping unrelated config.
+    const root = await createTempDir(tempDirectories, "provision-root-");
+    const worktree = await createTempDir(tempDirectories, "provision-worktree-");
+    await seedWorktree(worktree, config.pluginArtifacts, "a");
+
+    const appJsonPath = await provisionInto(root, worktree);
+    await fs.writeFile(
+      appJsonPath,
+      JSON.stringify({
+        settingsPopoutWindow: true,
+        spellcheck: true,
+        trashOption: "system",
+        showLineNumber: true,
+      }),
+    );
+    await provisionInto(root, worktree);
+
+    expect(JSON.parse(await fs.readFile(appJsonPath, "utf8"))).toEqual({
+      settingsPopoutWindow: false,
+      spellcheck: false,
+      trashOption: "local",
+      showLineNumber: true,
+    });
+  });
+
+  test("reseeds an unparseable app.json instead of failing", async () => {
+    const root = await createTempDir(tempDirectories, "provision-root-");
+    const worktree = await createTempDir(tempDirectories, "provision-worktree-");
+    await seedWorktree(worktree, config.pluginArtifacts, "a");
+
+    const appJsonPath = await provisionInto(root, worktree);
+    await fs.writeFile(appJsonPath, "{not json");
+    await provisionInto(root, worktree);
+
+    expect(JSON.parse(await fs.readFile(appJsonPath, "utf8"))).toEqual({
+      settingsPopoutWindow: false,
+      spellcheck: false,
+      trashOption: "local",
+    });
+  });
+});
+
 describe("linkPluginFile reconcile paths", () => {
   test("is a no-op when the correct symlink already exists", async () => {
     const dir = await createTempDir(tempDirectories, "link-");
