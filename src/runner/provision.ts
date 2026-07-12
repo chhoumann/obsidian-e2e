@@ -71,12 +71,12 @@ export async function provisionVault(
   const pluginPath = path.join(obsidianPath, "plugins", config.pluginId);
 
   await fs.mkdir(pluginPath, { recursive: true });
-  await writeJsonIfMissing(path.join(obsidianPath, "app.json"), {});
+  await writeAppJson(path.join(obsidianPath, "app.json"));
   await writeJsonIfMissing(path.join(obsidianPath, "appearance.json"), {});
   await writeJsonIfMissing(path.join(obsidianPath, "core-plugins.json"), []);
-  // community-plugins.json is written unconditionally (every other config is
-  // write-if-missing): it keeps the plugin enabled even if a prior provision or a
-  // manual edit dropped it. The vault is disposable E2E state, never user data.
+  // community-plugins.json is written unconditionally: it keeps the plugin
+  // enabled even if a prior provision or a manual edit dropped it. The vault is
+  // disposable E2E state, never user data.
   await writeJson(path.join(obsidianPath, "community-plugins.json"), [config.pluginId]);
   await writeJsonIfMissing(
     path.join(obsidianPath, "workspace.json"),
@@ -161,6 +161,29 @@ export function provisionShellExports(
     );
   }
   return toShellExports(exports);
+}
+
+/**
+ * Seed `app.json`, forcing `settingsPopoutWindow: false` while preserving every
+ * other existing key. Obsidian 1.13+ defaults the flag to true, which opens
+ * Settings in a separate popout window - outside the main window the harness
+ * drives and captures. Re-applied on every provision (not write-if-missing) so
+ * vaults provisioned before that Obsidian default existed are corrected on
+ * their next run.
+ */
+async function writeAppJson(appJsonPath: string): Promise<void> {
+  let existing: Record<string, unknown> = {};
+  if (await pathExists(appJsonPath)) {
+    try {
+      const parsed: unknown = JSON.parse(await fs.readFile(appJsonPath, "utf8"));
+      if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
+        existing = parsed as Record<string, unknown>;
+      }
+    } catch {
+      // Unparseable app.json in a disposable E2E vault: reseed it.
+    }
+  }
+  await writeJson(appJsonPath, { ...existing, settingsPopoutWindow: false });
 }
 
 async function assertRequiredPluginFiles(

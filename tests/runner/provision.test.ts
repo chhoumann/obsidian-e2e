@@ -236,6 +236,66 @@ for (const scenario of scenarios) {
   });
 }
 
+describe("app.json settings window enforcement", () => {
+  const config = makeConfig();
+
+  async function provisionInto(root: string, worktree: string) {
+    const options = resolveProvisionOptions(
+      { root, vault: `${config.pluginId}-app-json`, worktree },
+      config,
+    );
+    const result = await provisionVault(options, config);
+    return path.join(result.vaultPath, ".obsidian", "app.json");
+  }
+
+  test("seeds app.json with settingsPopoutWindow disabled", async () => {
+    const root = await createTempDir(tempDirectories, "provision-root-");
+    const worktree = await createTempDir(tempDirectories, "provision-worktree-");
+    await seedWorktree(worktree, config.pluginArtifacts, "a");
+
+    const appJsonPath = await provisionInto(root, worktree);
+
+    expect(JSON.parse(await fs.readFile(appJsonPath, "utf8"))).toEqual({
+      settingsPopoutWindow: false,
+    });
+  });
+
+  test("re-forces settingsPopoutWindow false on reprovision, preserving other keys", async () => {
+    // Vaults provisioned before Obsidian 1.13 introduced the popout default
+    // carry an app.json without the flag (or with it re-enabled); the next
+    // provision must correct it without dropping unrelated config.
+    const root = await createTempDir(tempDirectories, "provision-root-");
+    const worktree = await createTempDir(tempDirectories, "provision-worktree-");
+    await seedWorktree(worktree, config.pluginArtifacts, "a");
+
+    const appJsonPath = await provisionInto(root, worktree);
+    await fs.writeFile(
+      appJsonPath,
+      JSON.stringify({ settingsPopoutWindow: true, showLineNumber: true }),
+    );
+    await provisionInto(root, worktree);
+
+    expect(JSON.parse(await fs.readFile(appJsonPath, "utf8"))).toEqual({
+      settingsPopoutWindow: false,
+      showLineNumber: true,
+    });
+  });
+
+  test("reseeds an unparseable app.json instead of failing", async () => {
+    const root = await createTempDir(tempDirectories, "provision-root-");
+    const worktree = await createTempDir(tempDirectories, "provision-worktree-");
+    await seedWorktree(worktree, config.pluginArtifacts, "a");
+
+    const appJsonPath = await provisionInto(root, worktree);
+    await fs.writeFile(appJsonPath, "{not json");
+    await provisionInto(root, worktree);
+
+    expect(JSON.parse(await fs.readFile(appJsonPath, "utf8"))).toEqual({
+      settingsPopoutWindow: false,
+    });
+  });
+});
+
 describe("linkPluginFile reconcile paths", () => {
   test("is a no-op when the correct symlink already exists", async () => {
     const dir = await createTempDir(tempDirectories, "link-");
