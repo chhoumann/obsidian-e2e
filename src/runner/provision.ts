@@ -164,11 +164,27 @@ export function provisionShellExports(
 }
 
 /**
- * Seed `app.json`, forcing `settingsPopoutWindow: false` while preserving every
- * other existing key. Obsidian 1.13+ defaults the flag to true, which opens
- * Settings in a separate popout window - outside the main window the harness
- * drives and captures. Re-applied on every provision (not write-if-missing) so
- * vaults provisioned before that Obsidian default existed are corrected on
+ * Vault `app.json` keys the harness enforces, overriding both Obsidian's
+ * defaults and any drifted vault state:
+ * - `settingsPopoutWindow: false` - Obsidian 1.13+ defaults to opening
+ *   Settings in a separate popout window, outside the main window the harness
+ *   drives and captures.
+ * - `spellcheck: false` - the default (true) underlines typed test content
+ *   using OS dictionaries and language settings, adding per-machine variance
+ *   to screenshots and failure artifacts.
+ * - `trashOption: "local"` - the default ("system") sends UI-driven deletes
+ *   to the OS trash, leaking disposable test state outside the vault.
+ */
+export const ENFORCED_APP_CONFIG = {
+  settingsPopoutWindow: false,
+  spellcheck: false,
+  trashOption: "local",
+} as const;
+
+/**
+ * Seed `app.json`, forcing {@link ENFORCED_APP_CONFIG} while preserving every
+ * other existing key. Re-applied on every provision (not write-if-missing) so
+ * vaults provisioned before these Obsidian defaults existed are corrected on
  * their next run.
  */
 async function writeAppJson(appJsonPath: string): Promise<void> {
@@ -183,7 +199,7 @@ async function writeAppJson(appJsonPath: string): Promise<void> {
       // Unparseable app.json in a disposable E2E vault: reseed it.
     }
   }
-  await writeJson(appJsonPath, { ...existing, settingsPopoutWindow: false });
+  await writeJson(appJsonPath, { ...existing, ...ENFORCED_APP_CONFIG });
 }
 
 async function assertRequiredPluginFiles(

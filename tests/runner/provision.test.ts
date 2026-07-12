@@ -236,7 +236,7 @@ for (const scenario of scenarios) {
   });
 }
 
-describe("app.json settings window enforcement", () => {
+describe("app.json enforced config", () => {
   const config = makeConfig();
 
   async function provisionInto(root: string, worktree: string) {
@@ -248,7 +248,7 @@ describe("app.json settings window enforcement", () => {
     return path.join(result.vaultPath, ".obsidian", "app.json");
   }
 
-  test("seeds app.json with settingsPopoutWindow disabled", async () => {
+  test("seeds app.json with exactly the enforced config", async () => {
     const root = await createTempDir(tempDirectories, "provision-root-");
     const worktree = await createTempDir(tempDirectories, "provision-worktree-");
     await seedWorktree(worktree, config.pluginArtifacts, "a");
@@ -257,13 +257,16 @@ describe("app.json settings window enforcement", () => {
 
     expect(JSON.parse(await fs.readFile(appJsonPath, "utf8"))).toEqual({
       settingsPopoutWindow: false,
+      spellcheck: false,
+      trashOption: "local",
     });
   });
 
-  test("re-forces settingsPopoutWindow false on reprovision, preserving other keys", async () => {
-    // Vaults provisioned before Obsidian 1.13 introduced the popout default
-    // carry an app.json without the flag (or with it re-enabled); the next
-    // provision must correct it without dropping unrelated config.
+  test("re-forces enforced keys on reprovision, preserving other keys", async () => {
+    // Vaults provisioned before these Obsidian defaults existed carry an
+    // app.json without the keys (or with them drifted back to the Obsidian
+    // defaults); the next provision must correct every enforced key without
+    // dropping unrelated config.
     const root = await createTempDir(tempDirectories, "provision-root-");
     const worktree = await createTempDir(tempDirectories, "provision-worktree-");
     await seedWorktree(worktree, config.pluginArtifacts, "a");
@@ -271,12 +274,19 @@ describe("app.json settings window enforcement", () => {
     const appJsonPath = await provisionInto(root, worktree);
     await fs.writeFile(
       appJsonPath,
-      JSON.stringify({ settingsPopoutWindow: true, showLineNumber: true }),
+      JSON.stringify({
+        settingsPopoutWindow: true,
+        spellcheck: true,
+        trashOption: "system",
+        showLineNumber: true,
+      }),
     );
     await provisionInto(root, worktree);
 
     expect(JSON.parse(await fs.readFile(appJsonPath, "utf8"))).toEqual({
       settingsPopoutWindow: false,
+      spellcheck: false,
+      trashOption: "local",
       showLineNumber: true,
     });
   });
@@ -292,6 +302,8 @@ describe("app.json settings window enforcement", () => {
 
     expect(JSON.parse(await fs.readFile(appJsonPath, "utf8"))).toEqual({
       settingsPopoutWindow: false,
+      spellcheck: false,
+      trashOption: "local",
     });
   });
 });
