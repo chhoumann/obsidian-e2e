@@ -192,6 +192,16 @@ export async function runEvalJsonAsync<T>(
     allowNonZeroExit: false,
     timeoutMs: Math.max(1, Math.min(budgetMs, deadline - Date.now())),
   });
+  // Poll and cleanup reads are already this protocol's own recovery mechanism
+  // (idempotent, retried); stacking exec()'s recoverable dispatch under them
+  // would only double the machinery and churn its registry. The kickoff keeps
+  // the recoverable default: exec() resends it only when the registry proves
+  // it never ran, so the exactly-once guarantee is preserved - and a lost
+  // kickoff reply now recovers instead of counting as ambiguous.
+  const directCommandOptions = (budgetMs: number): ExecOptions => ({
+    ...commandOptions(budgetMs),
+    recoverable: false,
+  });
   const pause = async () => {
     await sleep(Math.max(0, Math.min(ASYNC_EVAL_POLL_INTERVAL_MS, deadline - Date.now())));
   };
@@ -227,7 +237,7 @@ export async function runEvalJsonAsync<T>(
       entry = await runEvalJson<AsyncEvalEntry | null>(
         dev,
         buildEvalJsonAsyncPollCode(nonce),
-        commandOptions(ASYNC_EVAL_COMMAND_TIMEOUT_MS),
+        directCommandOptions(ASYNC_EVAL_COMMAND_TIMEOUT_MS),
       );
     } catch (error) {
       lastError = error;
@@ -251,7 +261,7 @@ export async function runEvalJsonAsync<T>(
           await runEvalJson<boolean>(
             dev,
             buildEvalJsonAsyncCleanupCode(nonce),
-            commandOptions(ASYNC_EVAL_CLEANUP_TIMEOUT_MS),
+            directCommandOptions(ASYNC_EVAL_CLEANUP_TIMEOUT_MS),
           );
         } catch {
           // Best-effort: a leaked entry is one small object in the renderer.

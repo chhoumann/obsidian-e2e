@@ -78,9 +78,12 @@ export interface ExecOptions {
   /**
    * Whether `exec()` uses the recoverable dispatch protocol (lost CLI replies
    * are recovered by nonce-registry polls instead of hanging until
-   * `timeoutMs`). Defaults to true on the built-in transport and false on a
-   * custom one; context-destroying verbs (`reload`, `restart`,
-   * `plugins:restrict`, `dev:mobile`) always use the direct path.
+   * `timeoutMs`). Defaults to true on the built-in transport and false on ANY
+   * custom `transport` - including one that merely wraps the built-in
+   * transport for logging; pass `recoverable: true` to opt such a wrapper
+   * back in. Context-destroying verbs (`reload`, `restart`,
+   * `plugins:restrict`, `dev:mobile`, `command` with `app:reload`/`app:quit`)
+   * always use the direct path.
    */
   recoverable?: boolean;
   /**

@@ -955,9 +955,12 @@ which then hangs until the transport kills it (#25). `exec()` therefore wraps
 commands in a dispatch protocol: a one-time shim around the in-app CLI
 dispatcher records each command's reply under a per-call nonce before running
 it, so a lost reply is recovered by short idempotent poll reads instead of
-timing out. The shim dedups repeated nonces and refuses payloads pinned to a
-previous shim generation (an app reload), so a command is never executed twice
-by recovery - `quickadd:run`-style non-idempotent commands stay exactly-once.
+timing out. Recovery never re-sends a command without positive proof it did
+not run: the shim dedups repeated nonces, refuses payloads pinned to a
+previous shim generation (an app reload), and a reply that cannot be
+positively identified counts as unknown fate rather than as proof of
+non-execution. `quickadd:run`-style non-idempotent commands stay
+exactly-once.
 The command's handler sees its exact original argv, and the recovered
 `ExecResult` is byte-identical to the direct CLI output (including exit code 0
 for `Error: ...` replies).
@@ -971,10 +974,15 @@ Everything built on `exec()` - `dev.eval`, `dev.evalJson`, `command(id).run()`,
 recovery automatically.
 
 Defaults: recoverable on the built-in transport, direct on a custom
-`transport` (a test fake cannot serve the protocol); `reload`, `restart`,
-`plugins:restrict`, and `dev:mobile` always use the direct path because their
-success destroys the renderer context the recovery registry lives in. Override
-per call or via `defaultExecOptions` with `recoverable: true | false`.
+`transport` (a test fake cannot serve the protocol - note this also applies to
+transports that merely wrap the built-in one for logging; opt back in with
+`recoverable: true`). `reload`, `restart`, `plugins:restrict`, and
+`dev:mobile` always use the direct path because their success destroys the
+renderer context the recovery registry lives in, as does `command` with the
+context-destroying built-in ids (`app:reload`, `app:quit`); plugin commands
+whose handlers reload the app cannot be enumerated, so route those through
+`recoverable: false` yourself. Override per call or via `defaultExecOptions`
+with `recoverable: true | false`.
 
 When the result cannot be produced, `exec()` throws
 `ObsidianCommandDispatchError` whose `reason` names the precise transport

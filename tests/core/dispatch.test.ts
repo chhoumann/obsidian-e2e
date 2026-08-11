@@ -85,7 +85,8 @@ function createDispatchHarness(handlers: Record<string, CommandHandler>) {
     ) => Promise<unknown>;
     try {
       const value = (await handleCli([command, ...tokens])) as string | null | undefined;
-      return value == null ? "" : String(value);
+      // Mirrors main's `d && b(d)`: falsy resolutions write nothing.
+      return value ? String(value) : "";
     } catch (error) {
       return typeof error === "string" ? `Error: ${error}` : String(error);
     }
@@ -101,10 +102,10 @@ function createDispatchHarness(handlers: Record<string, CommandHandler>) {
     }
 
     if (behavior === "fail-exit") {
-      throw new ObsidianCommandError(
-        `Obsidian command failed with exit code 1: ${request.bin}`,
-        createExecResult(request.bin, request.argv, ""),
-      );
+      throw new ObsidianCommandError(`Obsidian command failed with exit code 1: ${request.bin}`, {
+        ...createExecResult(request.bin, request.argv, ""),
+        exitCode: 1,
+      });
     }
 
     if (command === "eval") {
@@ -208,6 +209,7 @@ describe("runRecoverableExec via client.exec", () => {
         throw "nope";
       },
       quiet: () => undefined,
+      zero: () => 0,
     });
     const client = harness.createClient();
 
@@ -220,6 +222,9 @@ describe("runRecoverableExec via client.exec", () => {
       stdout: "Error: kaboom\n",
     });
     await expect(client.exec("quiet")).resolves.toMatchObject({ exitCode: 0, stdout: "" });
+    // A falsy resolution writes nothing on the direct path (`d && b(d)` in
+    // Obsidian's main process) - the recovered path matches.
+    await expect(client.exec("zero")).resolves.toMatchObject({ exitCode: 0, stdout: "" });
     await expect(client.exec("no-such-command")).resolves.toMatchObject({
       exitCode: 0,
       stdout:
@@ -407,11 +412,72 @@ describe("runRecoverableExec via client.exec", () => {
     );
     const client = harness.createClient();
 
-    await expect(client.exec("anything", {}, { allowNonZeroExit: true })).resolves.toMatchObject({
-      exitCode: 0,
-      stdout: "",
-    });
+    const result = await client.exec("anything", { flag: "x" }, { allowNonZeroExit: true });
+    expect(result).toMatchObject({ exitCode: 1, stdout: "" });
+    // The outcome is reported against the caller's command, not the internal
+    // dispatch verb.
+    expect(result.argv).toEqual(["vault=test", "anything", "flag=x"]);
     await expect(client.exec("anything")).rejects.toBeInstanceOf(ObsidianCommandError);
+  });
+
+  it("keeps context-destroying palette ids on the direct path", async () => {
+    const harness = createDispatchHarness({
+      command: (flags) => `ran ${flags.id}`,
+    });
+    const client = harness.createClient();
+
+    await expect(client.exec("command", { id: "app:reload" })).resolves.toMatchObject({
+      stdout: "ran app:reload\n",
+    });
+    expect(dispatchRequests(harness.requests)).toHaveLength(0);
+
+    await expect(client.exec("command", { id: "quickadd:run" })).resolves.toMatchObject({
+      stdout: "ran quickadd:run\n",
+    });
+    expect(dispatchRequests(harness.requests)).toHaveLength(1);
+  });
+
+  it("propagates hard install failures immediately instead of retrying out the deadline", async () => {
+    const harness = createDispatchHarness({ greet: () => "hello" });
+    harness.setBehavior((request) => (request.argv[1] === "eval" ? "fail-exit" : undefined));
+    const client = harness.createClient();
+
+    const start = Date.now();
+    await expect(client.exec("greet", {}, { timeoutMs: 10_000 })).rejects.toBeInstanceOf(
+      ObsidianCommandError,
+    );
+    // A cold-app connect failure surfaces like the direct path does - fast -
+    // so waitFor probes keep their own cadence.
+    expect(Date.now() - start).toBeLessThan(1_000);
+  });
+
+  it("caps proof-gated resends with a precise undelivered failure", async () => {
+    let runs = 0;
+    const harness = createDispatchHarness({
+      "run-once": () => {
+        runs += 1;
+        return "ran";
+      },
+    });
+    // Before every dispatch attempt the renderer "reloads": the shim global
+    // vanishes and handleCli reverts, so each attempt gets the deterministic
+    // not-found reply, reinstalls, and resends - forever, without the cap.
+    harness.setBehavior((request) => {
+      if (request.argv[1] === DISPATCH_COMMAND) {
+        const globals = globalThis as MutableGlobal;
+        delete globals[SHIM_GLOBAL];
+        globals.handleCli = harness.realHandleCli;
+      }
+      return undefined;
+    });
+    const client = harness.createClient();
+
+    const error = await client.exec("run-once", {}, { timeoutMs: 30_000 }).catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(ObsidianCommandDispatchError);
+    expect((error as ObsidianCommandDispatchError).reason).toBe("undelivered");
+    expect(runs).toBe(0);
+    expect(dispatchRequests(harness.requests).length).toBeLessThanOrEqual(8);
   });
 
   it("keeps context-destroying verbs and recoverable:false on the direct path", async () => {

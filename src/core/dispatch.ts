@@ -68,6 +68,14 @@ const DISPATCH_INTERNAL_TIMEOUT_MS = 10_000;
 const DISPATCH_POLL_INTERVAL_MS = 100;
 /** Mirrors the transport's default command timeout, which bounded the direct form. */
 const DEFAULT_DISPATCH_TIMEOUT_MS = 30_000;
+/**
+ * Hard bound on how many times one exec() call may send its dispatch. Resends
+ * are only ever authorized by proof the nonce never ran, so a pathological
+ * environment (e.g. an app stuck in a reload loop answering "not found"
+ * forever) fails with a precise `undelivered` instead of hammering the CLI
+ * socket until the deadline.
+ */
+const MAX_DISPATCH_SENDS = 8;
 
 const PAYLOAD_PREFIX = "payload=";
 
@@ -143,10 +151,11 @@ export function buildDispatchShimCode(
     "let entry=ops.get(nonce);",
     "if(!entry){",
     "entry={state:'pending',reply:null,settled:null};",
-    // Reply formatting mirrors Obsidian's main process exactly (resolve ->
-    // value; string throw -> "Error: " + s; other throw -> String(err)), so
-    // the recovered output is byte-identical to the direct CLI output.
-    "entry.settled=Promise.resolve().then(()=>handleCli(payload.argv)).then((value)=>value==null?'':String(value),(error)=>typeof error==='string'?'Error: '+error:String(error)).then((reply)=>{entry.state='done';entry.reply=reply;return reply;});",
+    // Reply formatting mirrors Obsidian's main process exactly (a falsy
+    // resolution writes nothing - `d && b(d)`; string throw -> "Error: " + s;
+    // other throw -> String(err)), so the recovered output is byte-identical
+    // to the direct CLI output.
+    "entry.settled=Promise.resolve().then(()=>handleCli(payload.argv)).then((value)=>value?String(value):'',(error)=>typeof error==='string'?'Error: '+error:String(error)).then((reply)=>{entry.state='done';entry.reply=reply;return reply;});",
     "ops.set(nonce,entry);",
     "evictDone();",
     "}",
@@ -317,6 +326,13 @@ export async function runRecoverableExec(
         return installId;
       } catch (error) {
         state.installPromise = null;
+        // Only a lost install reply is worth retrying. Hard failures (connect
+        // refused on a cold app, nonzero exits, garbage replies) are the same
+        // persistent conditions the direct path surfaces immediately, and
+        // callers like waitFor probes rely on that fast failure.
+        if (!(error instanceof ObsidianCommandTimeoutError)) {
+          throw error;
+        }
         lastError = error;
         if (remaining() <= DISPATCH_POLL_INTERVAL_MS) {
           throw fail(
@@ -368,9 +384,21 @@ export async function runRecoverableExec(
     );
   };
 
+  let sends = 0;
+
   while (remaining() > 0) {
     if (shouldSend) {
       shouldSend = false;
+      if (sends >= MAX_DISPATCH_SENDS) {
+        // Every resend was authorized by proof the nonce never ran, so at the
+        // cap the command still provably has not executed.
+        throw fail(
+          "undelivered",
+          `The dispatch was sent ${sends} times and each send provably never ran (the environment keeps rejecting or losing it before dispatch); the command did not execute`,
+          lastError,
+        );
+      }
+      sends += 1;
       try {
         const attempt = await ctx.transport({
           ...execOptions,
@@ -413,12 +441,14 @@ export async function runRecoverableExec(
           installId = reinstalledId;
           payload = buildDispatchPayload(installId, nonce, command, args);
           shouldSend = true;
+          await sleep(Math.max(0, Math.min(DISPATCH_POLL_INTERVAL_MS, remaining())));
           continue;
         }
 
         if (envelope !== null && envelope.state === "done") {
           return synthesizeExecResult(ctx.bin, directArgv, envelope.reply);
         }
+        // Unknown fate falls through to the poll phase.
       } catch (error) {
         if (error instanceof ObsidianCommandDispatchError) {
           throw error;
@@ -428,9 +458,15 @@ export async function runRecoverableExec(
           lastError = error;
         } else if (error instanceof ObsidianCommandError && execOptions.allowNonZeroExit) {
           // A nonzero exit means the socket failed before a reply was served;
-          // callers that opted into nonzero exits get the result, as on the
-          // direct path.
-          return error.result;
+          // callers that opted into nonzero exits get the outcome, reported
+          // against their own command rather than the dispatch internals.
+          return {
+            argv: directArgv,
+            command: ctx.bin,
+            exitCode: error.result.exitCode,
+            stderr: error.result.stderr,
+            stdout: error.result.stdout,
+          };
         } else {
           throw error;
         }
@@ -459,8 +495,9 @@ export async function runRecoverableExec(
       } else if (poll.state === "missing" && !confirmedRunning) {
         // Same generation and no registry entry: the attempt provably never
         // dispatched (a delayed duplicate that fires later is dedup'd by the
-        // nonce). Resend immediately.
+        // nonce). Resend.
         shouldSend = true;
+        await sleep(Math.max(0, Math.min(DISPATCH_POLL_INTERVAL_MS, remaining())));
         continue;
       }
     } catch (error) {
@@ -483,7 +520,7 @@ export async function runRecoverableExec(
 
   throw fail(
     "ambiguous-delivery",
-    `No dispatch attempt was acknowledged within ${timeoutMs}ms and no in-app record of the command appeared; it may or may not have started. The nonce was never re-dispatched, so the command cannot have run twice`,
+    `No dispatch attempt was acknowledged within ${timeoutMs}ms and no in-app record of the command appeared; it may or may not have started. Resends only happen when the registry proves the nonce never ran, so the command cannot have run twice`,
     lastError,
   );
 }

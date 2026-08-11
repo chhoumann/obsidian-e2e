@@ -41,6 +41,24 @@ import { sleep, waitForValue } from "./wait";
  */
 const NON_RECOVERABLE_COMMANDS = new Set(["dev:mobile", "plugins:restrict", "reload", "restart"]);
 
+/**
+ * The generic `command` verb reaches any palette command by id, including the
+ * built-ins that destroy the renderer context. Plugin commands with reload
+ * side effects cannot be enumerated here - route those through
+ * `recoverable: false` explicitly.
+ */
+const NON_RECOVERABLE_COMMAND_IDS = new Set(["app:reload", "app:quit"]);
+
+function isNonRecoverableCommand(command: string, args: Record<string, ObsidianArg>): boolean {
+  if (NON_RECOVERABLE_COMMANDS.has(command)) {
+    return true;
+  }
+
+  return (
+    command === "command" && typeof args.id === "string" && NON_RECOVERABLE_COMMAND_IDS.has(args.id)
+  );
+}
+
 export function createObsidianClient(options: CreateObsidianClientOptions): ObsidianClient {
   const transport = options.transport ?? executeCommand;
   // Recoverable dispatch only means anything against the real CLI: a custom
@@ -217,7 +235,7 @@ export function createObsidianClient(options: CreateObsidianClientOptions): Obsi
     exec(command: string, args: Record<string, ObsidianArg> = {}, execOptions: ExecOptions = {}) {
       const { recoverable, ...request } = mergeExecOptions(defaultExecOptions, execOptions);
 
-      if ((recoverable ?? recoverableByDefault) && !NON_RECOVERABLE_COMMANDS.has(command)) {
+      if ((recoverable ?? recoverableByDefault) && !isNonRecoverableCommand(command, args)) {
         return runRecoverableExec(
           {
             bin: this.bin,
