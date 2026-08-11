@@ -1,0 +1,460 @@
+import { afterEach, describe, expect, it } from "vite-plus/test";
+
+import { createObsidianClient } from "../../src/core/client";
+import {
+  DISPATCH_COMMAND,
+  buildDispatchShimCode,
+  parseDispatchEnvelope,
+} from "../../src/core/dispatch";
+import {
+  ObsidianCommandDispatchError,
+  ObsidianCommandError,
+  ObsidianCommandTimeoutError,
+} from "../../src/core/errors";
+import { createExecResult } from "../helpers/create-exec-result";
+import { sleep } from "../../src/core/wait";
+import type { CommandTransport, ExecuteRequest } from "../../src/core/types";
+
+const SHIM_GLOBAL = "__obsidianE2EDispatch";
+
+type MutableGlobal = Record<string, unknown>;
+
+afterEach(() => {
+  const globals = globalThis as MutableGlobal;
+  delete globals[SHIM_GLOBAL];
+  delete globals.handleCli;
+  delete globals.window;
+});
+
+type RequestBehavior = "delay-request" | "drop-reply" | "fail-exit" | "timeout" | undefined;
+
+type CommandHandler = (flags: Record<string, string>) => unknown;
+
+/**
+ * Emulates the whole in-app side of the protocol by actually executing the
+ * generated shim/install/poll code in this process: `window.handleCli` is a
+ * miniature Obsidian dispatcher over `handlers` (string throws and all), the
+ * transport serves `eval` commands by evaluating their code against the real
+ * `globalThis`, and every other command is relayed through the current
+ * `window.handleCli` exactly like Obsidian's main process does. Behaviors
+ * model the observed transport failures: `drop-reply` executes the command and
+ * then throws (delivered, reply lost); `delay-request` queues the execution
+ * for a later `flushDelayed()` and throws (request stuck in the bridge);
+ * `timeout`/`fail-exit` fail without executing.
+ */
+function createDispatchHarness(handlers: Record<string, CommandHandler>) {
+  const globals = globalThis as MutableGlobal;
+  globals.window = globalThis;
+  const realHandleCli = async (argv: string[]) => {
+    const [name = "", ...tokens] = argv;
+    const handler = handlers[name];
+
+    if (!handler) {
+      throw `Command "${name}" not found. It may require a plugin to be enabled.`;
+    }
+
+    const flags: Record<string, string> = {};
+    for (const token of tokens) {
+      const separator = token.indexOf("=");
+      if (separator === -1) {
+        flags[token] = "true";
+      } else {
+        flags[token.slice(0, separator)] = token.slice(separator + 1);
+      }
+    }
+
+    return handler(flags);
+  };
+  globals.handleCli = realHandleCli;
+
+  const delayed: Array<() => Promise<string>> = [];
+  const requests: string[][] = [];
+  let behaviorFor: (request: ExecuteRequest) => RequestBehavior = () => undefined;
+
+  const serveThroughHandleCli = async (command: string, tokens: string[]): Promise<string> => {
+    // Fall back to the unwrapped dispatcher when a test removed
+    // window.handleCli to emulate an app without shim support.
+    const handleCli = ((globals.window as MutableGlobal).handleCli ?? realHandleCli) as (
+      argv: string[],
+    ) => Promise<unknown>;
+    try {
+      const value = (await handleCli([command, ...tokens])) as string | null | undefined;
+      return value == null ? "" : String(value);
+    } catch (error) {
+      return typeof error === "string" ? `Error: ${error}` : String(error);
+    }
+  };
+
+  const transport: CommandTransport = async (request) => {
+    requests.push(request.argv);
+    const behavior = behaviorFor(request);
+    const [, command = "", ...tokens] = request.argv;
+
+    if (behavior === "timeout") {
+      throw new ObsidianCommandTimeoutError(request.bin, request.argv, request.timeoutMs ?? 0);
+    }
+
+    if (behavior === "fail-exit") {
+      throw new ObsidianCommandError(
+        `Obsidian command failed with exit code 1: ${request.bin}`,
+        createExecResult(request.bin, request.argv, ""),
+      );
+    }
+
+    if (command === "eval") {
+      const code = (tokens[0] ?? "").slice("code=".length);
+      const output = (await (0, eval)(code)) as string;
+      return createExecResult(request.bin, request.argv, output);
+    }
+
+    if (behavior === "delay-request") {
+      delayed.push(() => serveThroughHandleCli(command, tokens));
+      throw new ObsidianCommandTimeoutError(request.bin, request.argv, request.timeoutMs ?? 0);
+    }
+
+    const served = serveThroughHandleCli(command, tokens);
+
+    if (behavior === "drop-reply") {
+      // Delivered but the reply is lost: the command keeps running in-app
+      // while the CLI process dies, exactly like the real transport kill.
+      await Promise.race([served.catch(() => ""), sleep(5)]);
+      throw new ObsidianCommandTimeoutError(request.bin, request.argv, request.timeoutMs ?? 0);
+    }
+
+    const output = await served;
+
+    return createExecResult(request.bin, request.argv, output ? `${output}\n` : "");
+  };
+
+  return {
+    createClient: (recoverable = true) =>
+      createObsidianClient({
+        defaultExecOptions: { recoverable },
+        transport,
+        vault: "test",
+      }),
+    delayed,
+    flushDelayed: async () => {
+      const pending = delayed.splice(0);
+      return Promise.all(pending.map((fire) => fire()));
+    },
+    requests,
+    setBehavior: (next: (request: ExecuteRequest) => RequestBehavior) => {
+      behaviorFor = next;
+    },
+  };
+}
+
+function dispatchRequests(requests: string[][]): string[][] {
+  return requests.filter((argv) => argv[1] === DISPATCH_COMMAND);
+}
+
+function installRequests(requests: string[][]): string[][] {
+  return requests.filter(
+    (argv) => argv[1] === "eval" && (argv[2] ?? "").includes("window.handleCli"),
+  );
+}
+
+describe("runRecoverableExec via client.exec", () => {
+  it("dispatches through the shim and returns a CLI-faithful result", async () => {
+    const seen: Array<Record<string, string>> = [];
+    const harness = createDispatchHarness({
+      greet: (flags) => {
+        seen.push(flags);
+        return `hello ${flags.name}`;
+      },
+    });
+    const client = harness.createClient();
+
+    const result = await client.exec("greet", { name: "world" });
+
+    expect(result).toMatchObject({ exitCode: 0, stderr: "", stdout: "hello world\n" });
+    // The synthesized argv reports the command the caller asked for.
+    expect(result.argv).toEqual(["vault=test", "greet", "name=world"]);
+    // The handler saw its exact flags - no nonce pollution.
+    expect(seen).toEqual([{ name: "world" }]);
+    expect(dispatchRequests(harness.requests)).toHaveLength(1);
+    expect(installRequests(harness.requests)).toHaveLength(1);
+
+    await client.exec("greet", { name: "again" });
+    // The shim install is memoized across calls.
+    expect(installRequests(harness.requests)).toHaveLength(1);
+  });
+
+  it("preserves CLI error semantics: error replies on stdout with exit code 0", async () => {
+    const harness = createDispatchHarness({
+      "throws-error": () => {
+        throw new Error("kaboom");
+      },
+      "throws-string": () => {
+        throw "nope";
+      },
+      quiet: () => undefined,
+    });
+    const client = harness.createClient();
+
+    await expect(client.exec("throws-string")).resolves.toMatchObject({
+      exitCode: 0,
+      stdout: "Error: nope\n",
+    });
+    await expect(client.exec("throws-error")).resolves.toMatchObject({
+      exitCode: 0,
+      stdout: "Error: kaboom\n",
+    });
+    await expect(client.exec("quiet")).resolves.toMatchObject({ exitCode: 0, stdout: "" });
+    await expect(client.exec("no-such-command")).resolves.toMatchObject({
+      exitCode: 0,
+      stdout:
+        'Error: Command "no-such-command" not found. It may require a plugin to be enabled.\n',
+    });
+  });
+
+  it("recovers a reply lost after the command executed - exactly once", async () => {
+    let runs = 0;
+    const harness = createDispatchHarness({
+      "run-once": () => {
+        runs += 1;
+        return "ran";
+      },
+    });
+    harness.setBehavior((request) =>
+      request.argv[1] === DISPATCH_COMMAND && dispatchRequests(harness.requests).length === 1
+        ? "drop-reply"
+        : undefined,
+    );
+    const client = harness.createClient();
+
+    const result = await client.exec("run-once");
+
+    expect(result.stdout).toBe("ran\n");
+    expect(runs).toBe(1);
+    // One dispatch attempt (reply dropped) + recovery polls, no resend.
+    expect(dispatchRequests(harness.requests)).toHaveLength(1);
+  });
+
+  it("a delayed dispatch firing after recovery cannot double-execute", async () => {
+    let runs = 0;
+    const harness = createDispatchHarness({
+      "run-once": () => {
+        runs += 1;
+        return "ran";
+      },
+    });
+    // First dispatch request gets stuck in the bridge; the resend goes through.
+    harness.setBehavior((request) =>
+      request.argv[1] === DISPATCH_COMMAND && dispatchRequests(harness.requests).length === 1
+        ? "delay-request"
+        : undefined,
+    );
+    const client = harness.createClient();
+
+    const result = await client.exec("run-once");
+
+    expect(result.stdout).toBe("ran\n");
+    expect(runs).toBe(1);
+    expect(dispatchRequests(harness.requests)).toHaveLength(2);
+
+    // The stuck original fires afterwards: the nonce dedup joins the finished
+    // run instead of re-executing, and replies with the stored envelope.
+    const [lateReply] = await harness.flushDelayed();
+    expect(runs).toBe(1);
+    expect(parseDispatchEnvelope(lateReply ?? "")).toMatchObject({ reply: "ran", state: "done" });
+  });
+
+  it("throws context-reset when the registry vanishes while an attempt's fate is unknown", async () => {
+    const harness = createDispatchHarness({
+      mutate: () => "mutated",
+    });
+    harness.setBehavior((request) => {
+      if (request.argv[1] !== DISPATCH_COMMAND) {
+        return undefined;
+      }
+      // The attempt executes but its reply is lost; then the renderer
+      // "reloads": the shim global and the wrapped handleCli disappear.
+      queueMicrotask(() => {
+        const globals = globalThis as MutableGlobal;
+        delete globals[SHIM_GLOBAL];
+      });
+      return "drop-reply";
+    });
+    const client = harness.createClient();
+
+    const error = await client.exec("mutate", {}, { timeoutMs: 2_000 }).catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(ObsidianCommandDispatchError);
+    expect((error as ObsidianCommandDispatchError).reason).toBe("context-reset");
+
+    // The next exec() reinstalls the shim and works again.
+    harness.setBehavior(() => undefined);
+    await expect(client.exec("mutate")).resolves.toMatchObject({ stdout: "mutated\n" });
+    expect(installRequests(harness.requests)).toHaveLength(2);
+  });
+
+  it("reports still-pending when the handler never settles", async () => {
+    const harness = createDispatchHarness({
+      forever: () => new Promise(() => {}),
+    });
+    harness.setBehavior((request) =>
+      request.argv[1] === DISPATCH_COMMAND ? "drop-reply" : undefined,
+    );
+    const client = harness.createClient();
+
+    const error = await client.exec("forever", {}, { timeoutMs: 500 }).catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(ObsidianCommandDispatchError);
+    expect((error as ObsidianCommandDispatchError).reason).toBe("still-pending");
+  });
+
+  it("reports ambiguous-delivery when nothing is ever acknowledged", async () => {
+    const harness = createDispatchHarness({});
+    harness.setBehavior((request) => {
+      if (request.argv[1] === DISPATCH_COMMAND) {
+        return "delay-request";
+      }
+      // Polls fail too, but only after the shim install succeeded.
+      if (request.argv[1] === "eval" && installRequests(harness.requests).length >= 1) {
+        return (request.argv[2] ?? "").includes("window.handleCli") ? undefined : "timeout";
+      }
+      return undefined;
+    });
+    const client = harness.createClient();
+
+    const error = await client.exec("anything", {}, { timeoutMs: 500 }).catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(ObsidianCommandDispatchError);
+    expect((error as ObsidianCommandDispatchError).reason).toBe("ambiguous-delivery");
+    expect((error as ObsidianCommandDispatchError).causeError).toBeInstanceOf(
+      ObsidianCommandTimeoutError,
+    );
+  });
+
+  it("returns the socket failure result when the caller allows nonzero exits", async () => {
+    const harness = createDispatchHarness({});
+    harness.setBehavior((request) =>
+      request.argv[1] === DISPATCH_COMMAND ? "fail-exit" : undefined,
+    );
+    const client = harness.createClient();
+
+    await expect(client.exec("anything", {}, { allowNonZeroExit: true })).resolves.toMatchObject({
+      exitCode: 0,
+      stdout: "",
+    });
+    await expect(client.exec("anything")).rejects.toBeInstanceOf(ObsidianCommandError);
+  });
+
+  it("keeps context-destroying verbs and recoverable:false on the direct path", async () => {
+    const harness = createDispatchHarness({
+      greet: () => "hello",
+      reload: () => "Reloading...",
+    });
+    const client = harness.createClient();
+
+    await expect(client.exec("reload")).resolves.toMatchObject({ stdout: "Reloading...\n" });
+    await expect(client.exec("greet", {}, { recoverable: false })).resolves.toMatchObject({
+      stdout: "hello\n",
+    });
+
+    expect(dispatchRequests(harness.requests)).toHaveLength(0);
+    expect(installRequests(harness.requests)).toHaveLength(0);
+  });
+
+  it("defaults custom transports to the direct path", async () => {
+    const harness = createDispatchHarness({ greet: () => "hello" });
+    const client = createObsidianClient({
+      transport: async (request) => {
+        harness.requests.push(request.argv);
+        return createExecResult(request.bin, request.argv, "hello\n");
+      },
+      vault: "test",
+    });
+
+    await expect(client.exec("greet")).resolves.toMatchObject({ stdout: "hello\n" });
+    expect(harness.requests).toEqual([["vault=test", "greet"]]);
+  });
+
+  it("falls back to the direct path on apps without window.handleCli", async () => {
+    const harness = createDispatchHarness({ greet: () => "hello" });
+    delete (globalThis as MutableGlobal).handleCli;
+    const client = harness.createClient();
+
+    await expect(client.exec("greet")).resolves.toMatchObject({ stdout: "hello\n" });
+    await expect(client.exec("greet")).resolves.toMatchObject({ stdout: "hello\n" });
+
+    expect(dispatchRequests(harness.requests)).toHaveLength(0);
+    // The unsupported answer is cached: one install probe, ever.
+    expect(installRequests(harness.requests)).toHaveLength(1);
+  });
+
+  it("carries dev.evalJson through the dispatch protocol end to end", async () => {
+    const harness = createDispatchHarness({
+      eval: (flags) => (0, eval)(flags.code ?? "") as string,
+    });
+    const client = harness.createClient();
+
+    await expect(client.dev.evalJson<{ items: number[] }>("({ items: [1, 2] })")).resolves.toEqual({
+      items: [1, 2],
+    });
+    expect(dispatchRequests(harness.requests)).toHaveLength(1);
+  });
+});
+
+describe("dispatch shim", () => {
+  it("refuses payloads pinned to another registry generation without dispatching", async () => {
+    let runs = 0;
+    createDispatchHarness({
+      "run-once": () => {
+        runs += 1;
+        return "ran";
+      },
+    });
+    (0, eval)(buildDispatchShimCode("gen-1"));
+    const handleCli = (globalThis as MutableGlobal).handleCli as (
+      argv: string[],
+    ) => Promise<string>;
+
+    const stale = await handleCli([
+      DISPATCH_COMMAND,
+      `payload=${JSON.stringify({ argv: ["run-once"], installId: "gen-0", nonce: "n1" })}`,
+    ]);
+
+    expect(JSON.parse(stale)).toEqual({ installId: "gen-1", state: "stale" });
+    expect(runs).toBe(0);
+  });
+
+  it("is idempotent: a second install returns the existing generation", () => {
+    createDispatchHarness({});
+    const first = (0, eval)(buildDispatchShimCode("gen-1")) as { installId: string };
+    const second = (0, eval)(buildDispatchShimCode("gen-2")) as { installId: string };
+
+    expect(first.installId).toBe("gen-1");
+    expect(second.installId).toBe("gen-1");
+  });
+
+  it("evicts only settled entries past the cap, never in-flight ones", async () => {
+    createDispatchHarness({
+      hang: () => new Promise(() => {}),
+      quick: () => "ok",
+    });
+    (0, eval)(buildDispatchShimCode("gen-1", 2));
+    const handleCli = (globalThis as MutableGlobal).handleCli as (
+      argv: string[],
+    ) => Promise<string>;
+    const dispatch = (nonce: string, command: string) =>
+      handleCli([
+        DISPATCH_COMMAND,
+        `payload=${JSON.stringify({ argv: [command], installId: "gen-1", nonce })}`,
+      ]);
+
+    void dispatch("pending-1", "hang");
+    await dispatch("done-1", "quick");
+    await dispatch("done-2", "quick");
+    await dispatch("done-3", "quick");
+
+    const ops = ((globalThis as MutableGlobal)[SHIM_GLOBAL] as { ops: Map<string, unknown> }).ops;
+    // Cap 2: the pending entry survives every eviction; the oldest done
+    // entries are reclaimed first.
+    expect(ops.has("pending-1")).toBe(true);
+    expect(ops.has("done-3")).toBe(true);
+    expect(ops.has("done-1")).toBe(false);
+  });
+});

@@ -2,11 +2,15 @@ export { createObsidianClient } from "./core/client";
 export {
   DevEvalAsyncError,
   DevEvalError,
+  ObsidianCommandDispatchError,
   ObsidianCommandError,
   ObsidianCommandTimeoutError,
   WaitForTimeoutError,
 } from "./core/errors";
-export type { DevEvalAsyncFailureReason } from "./core/errors";
+export type {
+  DevEvalAsyncFailureReason,
+  ObsidianCommandDispatchFailureReason,
+} from "./core/errors";
 export {
   captureFailureArtifacts,
   DEFAULT_FAILURE_ARTIFACTS_DIR,
