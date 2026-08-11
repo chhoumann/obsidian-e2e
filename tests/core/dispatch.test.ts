@@ -31,6 +31,7 @@ type RequestBehavior =
   | "drop-reply"
   | "fail-exit"
   | "frame-disposed"
+  | "hang"
   | "timeout"
   | undefined;
 
@@ -99,6 +100,10 @@ function createDispatchHarness(handlers: Record<string, CommandHandler>) {
 
     if (behavior === "timeout") {
       throw new ObsidianCommandTimeoutError(request.bin, request.argv, request.timeoutMs ?? 0);
+    }
+
+    if (behavior === "hang") {
+      return new Promise(() => {});
     }
 
     if (behavior === "fail-exit") {
@@ -451,6 +456,24 @@ describe("runRecoverableExec via client.exec", () => {
     expect(Date.now() - start).toBeLessThan(1_000);
   });
 
+  it("bounds waiting on a shared shim install by each caller's own deadline", async () => {
+    const harness = createDispatchHarness({ greet: () => "hello" });
+    harness.setBehavior((request) => (request.argv[1] === "eval" ? "hang" : undefined));
+    const client = harness.createClient();
+
+    // The first caller creates the (never-resolving) shared install.
+    const first = client.exec("greet", {}, { timeoutMs: 3_000 });
+    first.catch(() => {});
+
+    const start = Date.now();
+    const error = await client.exec("greet", {}, { timeoutMs: 300 }).catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(ObsidianCommandDispatchError);
+    expect((error as ObsidianCommandDispatchError).reason).toBe("undelivered");
+    // The short-deadline caller did not inherit the shared install's budget.
+    expect(Date.now() - start).toBeLessThan(2_000);
+  });
+
   it("caps proof-gated resends with a precise undelivered failure", async () => {
     let runs = 0;
     const harness = createDispatchHarness({
@@ -568,31 +591,34 @@ describe("dispatch shim", () => {
     expect(second.installId).toBe("gen-1");
   });
 
-  it("evicts only settled entries past the cap, never in-flight ones", async () => {
+  it("evicts only settled entries whose TTL passed, never in-flight or live ones", async () => {
     createDispatchHarness({
       hang: () => new Promise(() => {}),
       quick: () => "ok",
     });
-    (0, eval)(buildDispatchShimCode("gen-1", 2));
+    (0, eval)(buildDispatchShimCode("gen-1"));
     const handleCli = (globalThis as MutableGlobal).handleCli as (
       argv: string[],
     ) => Promise<string>;
-    const dispatch = (nonce: string, command: string) =>
+    const dispatch = (nonce: string, command: string, ttlMs: number) =>
       handleCli([
         DISPATCH_COMMAND,
-        `payload=${JSON.stringify({ argv: [command], installId: "gen-1", nonce })}`,
+        `payload=${JSON.stringify({ argv: [command], installId: "gen-1", nonce, ttlMs })}`,
       ]);
 
-    void dispatch("pending-1", "hang");
-    await dispatch("done-1", "quick");
-    await dispatch("done-2", "quick");
-    await dispatch("done-3", "quick");
+    void dispatch("pending-expired", "hang", 1);
+    await dispatch("done-expired", "quick", 1);
+    await dispatch("done-live", "quick", 60_000);
+    await sleep(10);
+    // A new insert triggers the eviction scan.
+    await dispatch("fresh", "quick", 60_000);
 
     const ops = ((globalThis as MutableGlobal)[SHIM_GLOBAL] as { ops: Map<string, unknown> }).ops;
-    // Cap 2: the pending entry survives every eviction; the oldest done
-    // entries are reclaimed first.
-    expect(ops.has("pending-1")).toBe(true);
-    expect(ops.has("done-3")).toBe(true);
-    expect(ops.has("done-1")).toBe(false);
+    // Only the settled entry whose TTL passed is reclaimed; a pending entry is
+    // never evicted regardless of age, and live entries survive.
+    expect(ops.has("done-expired")).toBe(false);
+    expect(ops.has("pending-expired")).toBe(true);
+    expect(ops.has("done-live")).toBe(true);
+    expect(ops.has("fresh")).toBe(true);
   });
 });

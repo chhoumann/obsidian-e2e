@@ -48,13 +48,16 @@ export const DISPATCH_COMMAND = "__obsidian-e2e:dispatch";
 
 const DISPATCH_REGISTRY = "__obsidianE2EDispatch";
 /**
- * Ring bound for remembered dispatches. Entries are small strings; the cap
- * only exists so an eternal warm instance cannot grow without bound. Pending
- * entries are never evicted (evicting one would forget an in-flight dedup),
- * and a done entry is only reclaimed after 2000 younger dispatches - far
- * beyond what any client still polling for it could observe.
+ * Grace added to a dispatch's remaining deadline to form its registry entry's
+ * TTL. Eviction is TTL-based, not slot-based, so the at-most-once argument
+ * holds at any traffic volume: an entry provably outlives every moment its
+ * caller could still resend (resends stop at the deadline; the entry survives
+ * to deadline + margin), and memory stays bounded by traffic rate x TTL
+ * because expired entries are reclaimed as new dispatches arrive.
  */
-const DISPATCH_REGISTRY_CAP = 2_000;
+const DISPATCH_ENTRY_TTL_MARGIN_MS = 60_000;
+/** Oldest entries scanned for expiry per insert; keeps eviction amortized O(1). */
+const DISPATCH_EVICTION_SCAN_LIMIT = 50;
 
 /**
  * Process budget for a single dispatch attempt. Commands normally settle in
@@ -125,10 +128,7 @@ interface DispatchPollResult {
  * re-wrapping. `installId: null` reports an app without `window.handleCli`,
  * which the client treats as "recovery unsupported, use the direct path".
  */
-export function buildDispatchShimCode(
-  installId: string,
-  registryCap: number = DISPATCH_REGISTRY_CAP,
-): string {
+export function buildDispatchShimCode(installId: string): string {
   return [
     "(()=>{",
     `const existing=globalThis.${DISPATCH_REGISTRY};`,
@@ -137,7 +137,10 @@ export function buildDispatchShimCode(
     "if(typeof handleCli!=='function'){return {installId:null};}",
     `const installId=${JSON.stringify(installId)};`,
     "const ops=new Map();",
-    `const evictDone=()=>{if(ops.size<=${registryCap}){return;}for(const [nonce,entry] of ops){if(entry.state==='done'){ops.delete(nonce);return;}}};`,
+    // TTL-based eviction: an entry is reclaimable only after the deadline its
+    // own payload declared (plus margin) has passed, i.e. only once no caller
+    // can still resend its nonce. Pending entries are never evicted.
+    `const evictExpired=()=>{const now=Date.now();let scanned=0;for(const [nonce,entry] of ops){if(++scanned>${DISPATCH_EVICTION_SCAN_LIMIT}){return;}if(entry.state==='done'&&entry.expiresAt<now){ops.delete(nonce);}}};`,
     "window.handleCli=(argv)=>{",
     `if(!Array.isArray(argv)||argv.length!==2||argv[0]!==${JSON.stringify(DISPATCH_COMMAND)}||typeof argv[1]!=='string'||!argv[1].startsWith(${JSON.stringify(PAYLOAD_PREFIX)})){return handleCli(argv);}`,
     "let payload;",
@@ -150,14 +153,15 @@ export function buildDispatchShimCode(
     "const nonce=String(payload.nonce);",
     "let entry=ops.get(nonce);",
     "if(!entry){",
-    "entry={state:'pending',reply:null,settled:null};",
+    "const ttlMs=typeof payload.ttlMs==='number'?payload.ttlMs:120000;",
+    "entry={state:'pending',reply:null,settled:null,expiresAt:Date.now()+ttlMs};",
     // Reply formatting mirrors Obsidian's main process exactly (a falsy
     // resolution writes nothing - `d && b(d)`; string throw -> "Error: " + s;
     // other throw -> String(err)), so the recovered output is byte-identical
     // to the direct CLI output.
     "entry.settled=Promise.resolve().then(()=>handleCli(payload.argv)).then((value)=>value?String(value):'',(error)=>typeof error==='string'?'Error: '+error:String(error)).then((reply)=>{entry.state='done';entry.reply=reply;return reply;});",
     "ops.set(nonce,entry);",
-    "evictDone();",
+    "evictExpired();",
     "}",
     "return entry.settled.then((reply)=>JSON.stringify({installId,state:'done',reply}));",
     "};",
@@ -185,11 +189,13 @@ export function buildDispatchPayload(
   nonce: string,
   command: string,
   args: Record<string, ObsidianArg>,
+  ttlMs: number,
 ): string {
   return JSON.stringify({
     argv: [command, ...buildArgTokens(args)],
     installId,
     nonce,
+    ttlMs,
   });
 }
 
@@ -229,11 +235,31 @@ export function parseDispatchEnvelope(stdout: string): DispatchEnvelope | null {
   return null;
 }
 
+const INSTALL_DEADLINE = Symbol("install-deadline");
+
+async function raceAgainstDeadline<T>(
+  promise: Promise<T>,
+  deadlineMs: number,
+): Promise<T | typeof INSTALL_DEADLINE> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<typeof INSTALL_DEADLINE>((resolve) => {
+        timer = setTimeout(() => resolve(INSTALL_DEADLINE), Math.max(0, deadlineMs));
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /**
  * Reconstruct the ExecResult the direct CLI path would have produced from a
  * stored reply. The CLI client exits 0 whenever the server serves a reply -
- * including "Error: ..." replies - and appends a newline to non-empty output;
- * an empty reply writes nothing (verified live against Obsidian 1.13.4).
+ * including "Error: ..." replies - and appends a newline to non-empty output
+ * when the reply lacks one; an empty reply writes nothing (verified live
+ * against Obsidian 1.13.4 and its decompiled main process).
  */
 function synthesizeExecResult(bin: string, argv: string[], reply: string): ExecResult {
   return {
@@ -316,14 +342,14 @@ export async function runRecoverableExec(
         );
       }
 
+      // The install promise is shared across callers, so a caller with a
+      // short deadline must not inherit another caller's install budget: race
+      // it against this call's own remaining time. Timing out the race leaves
+      // the shared install untouched for other callers and is provably safe
+      // for this one - nothing was dispatched for its nonce.
+      let raced: string | typeof INSTALL_DEADLINE | null;
       try {
-        const installId = await state.installPromise;
-        if (installId === null) {
-          state.unsupported = true;
-          return null;
-        }
-        state.installId = installId;
-        return installId;
+        raced = await raceAgainstDeadline(state.installPromise, remaining());
       } catch (error) {
         state.installPromise = null;
         // Only a lost install reply is worth retrying. Hard failures (connect
@@ -342,7 +368,24 @@ export async function runRecoverableExec(
           );
         }
         await sleep(Math.min(DISPATCH_POLL_INTERVAL_MS, remaining()));
+        continue;
       }
+
+      if (raced === INSTALL_DEADLINE) {
+        throw fail(
+          "undelivered",
+          `The dispatch shim install did not complete within this call's ${timeoutMs}ms deadline; the command was never dispatched and did not run`,
+          lastError,
+        );
+      }
+
+      if (raced === null) {
+        state.unsupported = true;
+        return null;
+      }
+
+      state.installId = raced;
+      return raced;
     }
   };
 
@@ -366,8 +409,13 @@ export async function runRecoverableExec(
     });
   }
 
+  // The entry TTL outlives every moment this call could still resend (resends
+  // stop at the deadline; the entry survives to deadline + margin), which is
+  // what makes "missing in the pinned generation" proof of non-execution.
+  const entryTtl = () => remaining() + DISPATCH_ENTRY_TTL_MARGIN_MS;
+
   let installId = initialInstallId;
-  let payload = buildDispatchPayload(installId, nonce, command, args);
+  let payload = buildDispatchPayload(installId, nonce, command, args, entryTtl());
   let confirmedRunning = false;
   let shouldSend = true;
   // Attempts whose fate is unknown (timed out). While any exist, entering a
@@ -439,7 +487,7 @@ export async function runRecoverableExec(
             );
           }
           installId = reinstalledId;
-          payload = buildDispatchPayload(installId, nonce, command, args);
+          payload = buildDispatchPayload(installId, nonce, command, args, entryTtl());
           shouldSend = true;
           await sleep(Math.max(0, Math.min(DISPATCH_POLL_INTERVAL_MS, remaining())));
           continue;
