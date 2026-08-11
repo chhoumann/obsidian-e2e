@@ -5,7 +5,16 @@ export function buildCommandArgv(
   command: string,
   args: Record<string, ObsidianArg> = {},
 ): string[] {
-  const argv = [`vault=${vaultName}`, command];
+  return [`vault=${vaultName}`, command, ...buildArgTokens(args)];
+}
+
+/**
+ * The `key=value` tokens after the command, without the `vault=` prefix - the
+ * shape `window.handleCli` receives in-app (the main process consumes the
+ * vault token before relaying argv).
+ */
+export function buildArgTokens(args: Record<string, ObsidianArg> = {}): string[] {
+  const tokens: string[] = [];
 
   for (const [key, value] of Object.entries(args)) {
     if (value === false || value === null || value === undefined) {
@@ -13,12 +22,12 @@ export function buildCommandArgv(
     }
 
     if (value === true) {
-      argv.push(key);
+      tokens.push(key);
       continue;
     }
 
-    argv.push(`${key}=${String(value)}`);
+    tokens.push(`${key}=${String(value)}`);
   }
 
-  return argv;
+  return tokens;
 }

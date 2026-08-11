@@ -75,6 +75,22 @@ export interface ExecOptions {
   allowNonZeroExit?: boolean;
   cwd?: string;
   env?: NodeJS.ProcessEnv;
+  /**
+   * Whether `exec()` uses the recoverable dispatch protocol (lost CLI replies
+   * are recovered by nonce-registry polls instead of hanging until
+   * `timeoutMs`). Defaults to true on the built-in transport and false on ANY
+   * custom `transport` - including one that merely wraps the built-in
+   * transport for logging; pass `recoverable: true` to opt such a wrapper
+   * back in. Context-destroying verbs (`reload`, `restart`,
+   * `plugins:restrict`, `dev:mobile`, `command` with `app:reload`/`app:quit`)
+   * always use the direct path.
+   */
+  recoverable?: boolean;
+  /**
+   * On the direct path: the process budget for the spawned CLI command. On
+   * the recoverable path: the overall deadline for the command's result;
+   * internal dispatch/poll commands run on their own short budgets.
+   */
   timeoutMs?: number;
 }
 

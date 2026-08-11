@@ -771,6 +771,9 @@ describe("createObsidianClient", () => {
           ...process.env,
           OBSIDIAN_E2E_TEST_LOG: logPath,
         },
+        // The fake binary serves canned eval replies, not the dispatch shim
+        // protocol; this test exercises the direct path's argv plumbing.
+        recoverable: false,
       },
       vault: "dev",
     });

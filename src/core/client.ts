@@ -1,4 +1,5 @@
 import { buildCommandArgv } from "./args";
+import { createDispatchState, runRecoverableExec } from "./dispatch";
 import { mergeExecOptions } from "./exec-options";
 import { attachClientInternals, createRestoreManager } from "./internals";
 import { createObsidianMetadataHandle } from "../metadata/metadata";
@@ -32,8 +33,39 @@ import type {
 } from "./types";
 import { sleep, waitForValue } from "./wait";
 
+/**
+ * CLI verbs whose success destroys or replaces the renderer context (the only
+ * handlers that call `window.location.reload()` / `app.relaunch()`). Their
+ * replies race their own effect by design, and the dispatch registry dies with
+ * the context, so they always use the direct single-shot path.
+ */
+const NON_RECOVERABLE_COMMANDS = new Set(["dev:mobile", "plugins:restrict", "reload", "restart"]);
+
+/**
+ * The generic `command` verb reaches any palette command by id, including the
+ * built-ins that destroy the renderer context. Plugin commands with reload
+ * side effects cannot be enumerated here - route those through
+ * `recoverable: false` explicitly.
+ */
+const NON_RECOVERABLE_COMMAND_IDS = new Set(["app:reload", "app:quit"]);
+
+function isNonRecoverableCommand(command: string, args: Record<string, ObsidianArg>): boolean {
+  if (NON_RECOVERABLE_COMMANDS.has(command)) {
+    return true;
+  }
+
+  return (
+    command === "command" && typeof args.id === "string" && NON_RECOVERABLE_COMMAND_IDS.has(args.id)
+  );
+}
+
 export function createObsidianClient(options: CreateObsidianClientOptions): ObsidianClient {
   const transport = options.transport ?? executeCommand;
+  // Recoverable dispatch only means anything against the real CLI: a custom
+  // transport (a test fake) would receive dispatch-verb argv it cannot serve,
+  // so it defaults to the direct path unless `recoverable` opts in.
+  const recoverableByDefault = !options.transport;
+  const dispatchState = createDispatchState();
   const defaultExecOptions = options.defaultExecOptions;
   const waitDefaults = {
     intervalMs: options.intervalMs,
@@ -201,8 +233,24 @@ export function createObsidianClient(options: CreateObsidianClientOptions): Obsi
       return parseCommandIds(output);
     },
     exec(command: string, args: Record<string, ObsidianArg> = {}, execOptions: ExecOptions = {}) {
+      const { recoverable, ...request } = mergeExecOptions(defaultExecOptions, execOptions);
+
+      if ((recoverable ?? recoverableByDefault) && !isNonRecoverableCommand(command, args)) {
+        return runRecoverableExec(
+          {
+            bin: this.bin,
+            state: dispatchState,
+            transport,
+            vault: options.vault,
+          },
+          command,
+          args,
+          request,
+        );
+      }
+
       return transport({
-        ...mergeExecOptions(defaultExecOptions, execOptions),
+        ...request,
         argv: buildCommandArgv(options.vault, command, args),
         bin: this.bin,
       });

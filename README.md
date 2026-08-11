@@ -946,6 +946,58 @@ Hand-rolled fire-and-poll loops (a `window` global plus repeated short
 `evalJson` reads) are obsolete: `evalJsonAsync` is that pattern, managed by the
 package.
 
+### How `exec()` recovers lost CLI replies
+
+Every CLI command's reply crosses Obsidian's main-to-renderer bridge exactly
+once, and that bridge loses or delays messages under suite load - a command can
+complete in-app in milliseconds while its reply never reaches the CLI client,
+which then hangs until the transport kills it (#25). `exec()` therefore wraps
+commands in a dispatch protocol: a one-time shim around the in-app CLI
+dispatcher records each command's reply under a per-call nonce before running
+it, so a lost reply is recovered by short idempotent poll reads instead of
+timing out. Recovery never re-sends a command without positive proof it did
+not run: the shim dedups repeated nonces, refuses payloads pinned to a
+previous shim generation (an app reload), and a reply that cannot be
+positively identified counts as unknown fate rather than as proof of
+non-execution. `quickadd:run`-style non-idempotent commands stay
+exactly-once.
+The command's handler sees its exact original argv, and the recovered
+`ExecResult` is byte-identical to the direct CLI output (including exit code 0
+for `Error: ...` replies).
+
+The happy path stays a single CLI roundtrip. On the recoverable path,
+`timeoutMs` is the overall deadline for the command's result; the dispatch
+attempt and the internal polls run on their own short budgets, so a
+long-running command no longer dies with the 30s socket hold either.
+Everything built on `exec()` - `dev.eval`, `dev.evalJson`, `command(id).run()`,
+`plugin(id).reload()`, and the `evalJsonAsync` internals - gains the same
+recovery automatically.
+
+Defaults: recoverable on the built-in transport, direct on a custom
+`transport` (a test fake cannot serve the protocol - note this also applies to
+transports that merely wrap the built-in one for logging; opt back in with
+`recoverable: true`). `reload`, `restart`, `plugins:restrict`, and
+`dev:mobile` always use the direct path because their success destroys the
+renderer context the recovery registry lives in, as does `command` with the
+context-destroying built-in ids (`app:reload`, `app:quit`); plugin commands
+whose handlers reload the app cannot be enumerated, so route those through
+`recoverable: false` yourself. Override per call or via `defaultExecOptions`
+with `recoverable: true | false`.
+
+When the result cannot be produced, `exec()` throws
+`ObsidianCommandDispatchError` whose `reason` names the precise transport
+state:
+
+- `ambiguous-delivery`: no dispatch attempt was acknowledged and no in-app
+  record appeared; the command may or may not have started, and cannot have
+  run twice.
+- `context-reset`: the renderer context was reset while an attempt was in
+  flight; whether the command executed before the reset is unknowable.
+- `still-pending`: the command is confirmed running in-app but has not settled
+  within the deadline.
+- `undelivered`: the dispatch shim could not be installed; the command was
+  never dispatched and did not run, so retrying is safe.
+
 ## Layer Boundaries
 
 - `vault` stays filesystem-only. If the behavior depends on Obsidian parsing or

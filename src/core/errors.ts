@@ -86,6 +86,52 @@ export class DevEvalAsyncError extends Error {
   }
 }
 
+/**
+ * Failure taxonomy for the recoverable `exec()` dispatch protocol. Extends the
+ * `evalJsonAsync` taxonomy with `undelivered` - unlike an eval kickoff, a
+ * dispatch that was never sent (the shim could not be installed) is *provably*
+ * unexecuted, and callers may safely retry:
+ *
+ * - `ambiguous-delivery`: no dispatch attempt was acknowledged and no in-app
+ *   record appeared before the deadline. The command may or may not have
+ *   started; the nonce was never re-dispatched, so it cannot have run twice.
+ * - `context-reset`: the renderer context was reset (e.g. an app or vault
+ *   reload) while an attempt with unknown fate was in flight; whether the
+ *   command executed before the reset is unknowable.
+ * - `still-pending`: the command is confirmed running in-app but its handler
+ *   has not settled within the deadline. It may still complete afterwards.
+ * - `undelivered`: the dispatch shim could not be installed (or disappeared
+ *   before any attempt was acknowledged); the command was never dispatched
+ *   and did not run.
+ */
+export type ObsidianCommandDispatchFailureReason =
+  | "ambiguous-delivery"
+  | "context-reset"
+  | "still-pending"
+  | "undelivered";
+
+export class ObsidianCommandDispatchError extends Error {
+  readonly argv: string[];
+  readonly causeError?: unknown;
+  readonly nonce: string;
+  readonly reason: ObsidianCommandDispatchFailureReason;
+
+  constructor(
+    message: string,
+    reason: ObsidianCommandDispatchFailureReason,
+    nonce: string,
+    argv: string[],
+    causeError?: unknown,
+  ) {
+    super(message);
+    this.name = "ObsidianCommandDispatchError";
+    this.reason = reason;
+    this.nonce = nonce;
+    this.argv = argv;
+    this.causeError = causeError;
+  }
+}
+
 export class WaitForTimeoutError extends Error {
   readonly causeError?: unknown;
 
