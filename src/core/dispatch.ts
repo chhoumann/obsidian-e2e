@@ -185,10 +185,17 @@ export function buildDispatchPayload(
 }
 
 /**
- * Parse a dispatch attempt's stdout. `null` means the reply did not come from
- * the shim - Obsidian's real parser answered (`Error: Command ... not found`),
- * i.e. the shim is gone and the inner command provably did not run.
+ * Whether a served non-envelope reply is Obsidian's own "command not found"
+ * answer for the dispatch verb - the one reply that proves the shim is gone
+ * AND the inner command was never parsed, making a resend safe. Any other
+ * non-envelope reply (e.g. a frame-disposal error delivered by the main
+ * process) leaves the dispatch's fate unknown.
  */
+export function isDispatchVerbNotFound(stdout: string): boolean {
+  return stdout.includes(`"${DISPATCH_COMMAND}" not found`);
+}
+
+/** Parse a dispatch attempt's stdout; `null` means it is not a shim envelope. */
 export function parseDispatchEnvelope(stdout: string): DispatchEnvelope | null {
   let parsed: unknown;
 
@@ -374,11 +381,23 @@ export async function runRecoverableExec(
         });
         const envelope = parseDispatchEnvelope(attempt.stdout);
 
-        if (envelope === null || envelope.state === "stale") {
-          // The shim is gone (Obsidian's parser answered "not found") or it
-          // was reinstalled under a new generation (stale refusal). Either
-          // way THIS attempt provably did not run. Re-pinning and resending
-          // is safe only while no earlier attempt has unknown fate.
+        if (envelope === null && !isDispatchVerbNotFound(attempt.stdout)) {
+          // A served reply that is neither a shim envelope nor Obsidian's
+          // not-found answer for the dispatch verb. The known producer is a
+          // renderer teardown mid-request (Obsidian's main process converts
+          // the executeJavaScript rejection into a delivered string like
+          // "Error: Render frame was disposed..."), in which case the
+          // dispatch may have executed before the context died - resending
+          // would risk a double run. Treat the fate as unknown and let the
+          // polls classify the context.
+          unknownFateAttempts += 1;
+          lastError = new Error(`Unrecognized dispatch reply: ${attempt.stdout.slice(0, 500)}`);
+        } else if (envelope === null || envelope.state === "stale") {
+          // Obsidian's parser answered "command not found" (the shim is gone
+          // and the inner command was never parsed) or the live shim refused
+          // a payload pinned to a previous generation. Either way THIS
+          // attempt provably did not run. Re-pinning and resending is safe
+          // only while no earlier attempt has unknown fate.
           if (unknownFateAttempts > 0) {
             throw contextReset(installId);
           }
@@ -397,7 +416,9 @@ export async function runRecoverableExec(
           continue;
         }
 
-        return synthesizeExecResult(ctx.bin, directArgv, envelope.reply);
+        if (envelope !== null && envelope.state === "done") {
+          return synthesizeExecResult(ctx.bin, directArgv, envelope.reply);
+        }
       } catch (error) {
         if (error instanceof ObsidianCommandDispatchError) {
           throw error;

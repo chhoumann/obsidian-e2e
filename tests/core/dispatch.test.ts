@@ -26,7 +26,13 @@ afterEach(() => {
   delete globals.window;
 });
 
-type RequestBehavior = "delay-request" | "drop-reply" | "fail-exit" | "timeout" | undefined;
+type RequestBehavior =
+  | "delay-request"
+  | "drop-reply"
+  | "fail-exit"
+  | "frame-disposed"
+  | "timeout"
+  | undefined;
 
 type CommandHandler = (flags: Record<string, string>) => unknown;
 
@@ -112,6 +118,17 @@ function createDispatchHarness(handlers: Record<string, CommandHandler>) {
       throw new ObsidianCommandTimeoutError(request.bin, request.argv, request.timeoutMs ?? 0);
     }
 
+    if (behavior === "frame-disposed") {
+      // The renderer tore down mid-request: the command may or may not have
+      // dispatched, and Obsidian's main process converts the rejected
+      // executeJavaScript into a served string reply at exit 0.
+      return createExecResult(
+        request.bin,
+        request.argv,
+        "Error: Render frame was disposed before WebFrameMain could be accessed\n",
+      );
+    }
+
     const served = serveThroughHandleCli(command, tokens);
 
     if (behavior === "drop-reply") {
@@ -138,6 +155,7 @@ function createDispatchHarness(handlers: Record<string, CommandHandler>) {
       const pending = delayed.splice(0);
       return Promise.all(pending.map((fire) => fire()));
     },
+    realHandleCli,
     requests,
     setBehavior: (next: (request: ExecuteRequest) => RequestBehavior) => {
       behaviorFor = next;
@@ -287,6 +305,60 @@ describe("runRecoverableExec via client.exec", () => {
     // The next exec() reinstalls the shim and works again.
     harness.setBehavior(() => undefined);
     await expect(client.exec("mutate")).resolves.toMatchObject({ stdout: "mutated\n" });
+    expect(installRequests(harness.requests)).toHaveLength(2);
+  });
+
+  it("never resends after a frame-disposal reply - the dispatch's fate is unknown", async () => {
+    let runs = 0;
+    const harness = createDispatchHarness({
+      "run-once": () => {
+        runs += 1;
+        return "ran";
+      },
+    });
+    harness.setBehavior((request) => {
+      if (request.argv[1] !== DISPATCH_COMMAND) {
+        return undefined;
+      }
+      // The context reset that produced the frame-disposal reply also wipes
+      // the shim registry.
+      delete (globalThis as MutableGlobal)[SHIM_GLOBAL];
+      return "frame-disposed";
+    });
+    const client = harness.createClient();
+
+    const error = await client.exec("run-once", {}, { timeoutMs: 2_000 }).catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(ObsidianCommandDispatchError);
+    expect((error as ObsidianCommandDispatchError).reason).toBe("context-reset");
+    // The command was never re-dispatched into the fresh context.
+    expect(dispatchRequests(harness.requests)).toHaveLength(1);
+    expect(runs).toBe(0);
+  });
+
+  it("reinstalls and resends after the not-found reply that proves the command never ran", async () => {
+    let runs = 0;
+    const harness = createDispatchHarness({
+      "run-once": () => {
+        runs += 1;
+        return "ran";
+      },
+    });
+    const client = harness.createClient();
+
+    // Warm the shim, then simulate a renderer reload between calls: the shim
+    // global and the handleCli wrapper are gone, so the next dispatch hits
+    // Obsidian's real parser and gets the deterministic not-found reply.
+    await client.exec("run-once");
+    const globals = globalThis as MutableGlobal;
+    delete globals[SHIM_GLOBAL];
+    globals.handleCli = harness.realHandleCli;
+
+    await expect(client.exec("run-once")).resolves.toMatchObject({ stdout: "ran\n" });
+
+    expect(runs).toBe(2);
+    // First call: one dispatch. Second call: not-found probe + resend.
+    expect(dispatchRequests(harness.requests)).toHaveLength(3);
     expect(installRequests(harness.requests)).toHaveLength(2);
   });
 
