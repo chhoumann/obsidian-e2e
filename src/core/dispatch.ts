@@ -58,17 +58,22 @@ const DISPATCH_REGISTRY = "__obsidianE2EDispatch";
 const DISPATCH_ENTRY_TTL_MARGIN_MS = 60_000;
 /** Oldest entries scanned for expiry per insert; keeps eviction amortized O(1). */
 const DISPATCH_EVICTION_SCAN_LIMIT = 50;
+const DISPATCH_GRACE_MS = 1_500;
+const DISPATCH_MAX_GRACE_MS = 5_000;
 
 /**
- * Process budget for a single dispatch attempt. Commands normally settle in
- * milliseconds; when a reply is lost this bounds the stall before recovery
- * polling starts. A command still running when the budget kills the CLI
- * process is unaffected in-app - polls carry its result afterwards.
+ * Process budget for a single dispatch attempt. The shim answers inside
+ * DISPATCH_GRACE_MS or with `{state:'pending'}`, so this only has to cover
+ * grace plus bridge slack. A lost reply or a pending ack both fall into
+ * polling. A command still running when the budget kills the CLI process is
+ * unaffected in-app.
  */
-const DISPATCH_ATTEMPT_TIMEOUT_MS = 5_000;
+const DISPATCH_ATTEMPT_TIMEOUT_MS = 2_500;
 /** Budget for internal install/poll commands; mirrors the evalJsonAsync value. */
 const DISPATCH_INTERNAL_TIMEOUT_MS = 10_000;
 const DISPATCH_POLL_INTERVAL_MS = 100;
+const DISPATCH_POLL_MAX_INTERVAL_MS = 1_000;
+const DISPATCH_UNSUPPORTED_REPROBE_MS = 60_000;
 /** Mirrors the transport's default command timeout, which bounded the direct form. */
 const DEFAULT_DISPATCH_TIMEOUT_MS = 30_000;
 /**
@@ -85,15 +90,21 @@ const PAYLOAD_PREFIX = "payload=";
 export interface DispatchState {
   installId: string | null;
   installPromise: Promise<string | null> | null;
-  unsupported: boolean;
+  unsupportedAt: number | null;
 }
 
 export function createDispatchState(): DispatchState {
   return {
     installId: null,
     installPromise: null,
-    unsupported: false,
+    unsupportedAt: null,
   };
+}
+
+export function isUnsupportedCached(state: DispatchState, now: number = Date.now()): boolean {
+  return (
+    state.unsupportedAt !== null && now - state.unsupportedAt < DISPATCH_UNSUPPORTED_REPROBE_MS
+  );
 }
 
 export interface DispatchContext {
@@ -114,7 +125,12 @@ interface DispatchStaleEnvelope {
   state: "stale";
 }
 
-type DispatchEnvelope = DispatchDoneEnvelope | DispatchStaleEnvelope;
+interface DispatchPendingEnvelope {
+  installId: string;
+  state: "pending";
+}
+
+type DispatchEnvelope = DispatchDoneEnvelope | DispatchPendingEnvelope | DispatchStaleEnvelope;
 
 interface DispatchPollResult {
   installId: string;
@@ -154,7 +170,9 @@ export function buildDispatchShimCode(installId: string): string {
     "let entry=ops.get(nonce);",
     "if(!entry){",
     "const ttlMs=typeof payload.ttlMs==='number'?payload.ttlMs:120000;",
-    "entry={state:'pending',reply:null,settled:null,expiresAt:Date.now()+ttlMs};",
+    `const graceMs=Math.max(0,Math.min(${DISPATCH_MAX_GRACE_MS},typeof payload.graceMs==='number'?payload.graceMs:${DISPATCH_GRACE_MS}));`,
+    "const now=Date.now();",
+    "entry={state:'pending',reply:null,settled:null,expiresAt:now+ttlMs,graceEndsAtMs:now+graceMs};",
     // Reply formatting mirrors Obsidian's main process exactly (a falsy
     // resolution writes nothing - `d && b(d)`; string throw -> "Error: " + s;
     // other throw -> String(err)), so the recovered output is byte-identical
@@ -163,7 +181,9 @@ export function buildDispatchShimCode(installId: string): string {
     "ops.set(nonce,entry);",
     "evictExpired();",
     "}",
-    "return entry.settled.then((reply)=>JSON.stringify({installId,state:'done',reply}));",
+    "if(entry.state==='done'){return Promise.resolve(JSON.stringify({installId,state:'done',reply:entry.reply}));}",
+    "if(Date.now()>=entry.graceEndsAtMs){return Promise.resolve(JSON.stringify({installId,state:'pending'}));}",
+    "return new Promise((resolve)=>{const answer=()=>resolve(JSON.stringify(entry.state==='done'?{installId,state:'done',reply:entry.reply}:{installId,state:'pending'}));const timer=setTimeout(answer,Math.max(0,entry.graceEndsAtMs-Date.now()));entry.settled.then(()=>{clearTimeout(timer);answer();});});",
     "};",
     `globalThis.${DISPATCH_REGISTRY}={installId,ops};`,
     "return {installId};",
@@ -190,13 +210,26 @@ export function buildDispatchPayload(
   command: string,
   args: Record<string, ObsidianArg>,
   ttlMs: number,
+  graceMs: number,
 ): string {
   return JSON.stringify({
     argv: [command, ...buildArgTokens(args)],
     installId,
     nonce,
     ttlMs,
+    graceMs,
   });
+}
+
+export function dispatchPollDelayMs(completedPolls: number): number {
+  if (completedPolls <= 0) {
+    return 0;
+  }
+
+  return Math.min(
+    DISPATCH_POLL_MAX_INTERVAL_MS,
+    DISPATCH_POLL_INTERVAL_MS * 2 ** (completedPolls - 1),
+  );
 }
 
 /**
@@ -226,6 +259,10 @@ export function parseDispatchEnvelope(stdout: string): DispatchEnvelope | null {
 
   if (parsed.state === "stale") {
     return { installId: parsed.installId, state: "stale" };
+  }
+
+  if (parsed.state === "pending") {
+    return { installId: parsed.installId, state: "pending" };
   }
 
   if (parsed.state === "done" && typeof parsed.reply === "string") {
@@ -318,14 +355,10 @@ export async function runRecoverableExec(
 
   let lastError: unknown;
 
-  // Install phase. The memoized promise is shared across concurrent exec()
-  // calls; a failed install clears it so the next caller retries. Detection of
-  // an app without window.handleCli is cached and downgrades every future
-  // exec() to the direct path.
   const ensureShim = async (): Promise<string | null> => {
     const { state } = ctx;
     while (true) {
-      if (state.unsupported) {
+      if (isUnsupportedCached(state)) {
         return null;
       }
 
@@ -380,11 +413,13 @@ export async function runRecoverableExec(
       }
 
       if (raced === null) {
-        state.unsupported = true;
+        state.installPromise = null;
+        state.unsupportedAt = Date.now();
         return null;
       }
 
       state.installId = raced;
+      state.unsupportedAt = null;
       return raced;
     }
   };
@@ -413,9 +448,10 @@ export async function runRecoverableExec(
   // stop at the deadline; the entry survives to deadline + margin), which is
   // what makes "missing in the pinned generation" proof of non-execution.
   const entryTtl = () => remaining() + DISPATCH_ENTRY_TTL_MARGIN_MS;
+  const entryGrace = () =>
+    Math.max(0, Math.min(DISPATCH_GRACE_MS, remaining() - DISPATCH_POLL_INTERVAL_MS));
 
   let installId = initialInstallId;
-  let payload = buildDispatchPayload(installId, nonce, command, args, entryTtl());
   let confirmedRunning = false;
   let shouldSend = true;
   // Attempts whose fate is unknown (timed out). While any exist, entering a
@@ -433,6 +469,7 @@ export async function runRecoverableExec(
   };
 
   let sends = 0;
+  let completedPolls = 0;
 
   while (remaining() > 0) {
     if (shouldSend) {
@@ -447,6 +484,14 @@ export async function runRecoverableExec(
         );
       }
       sends += 1;
+      const payload = buildDispatchPayload(
+        installId,
+        nonce,
+        command,
+        args,
+        entryTtl(),
+        entryGrace(),
+      );
       try {
         const attempt = await ctx.transport({
           ...execOptions,
@@ -457,7 +502,9 @@ export async function runRecoverableExec(
         });
         const envelope = parseDispatchEnvelope(attempt.stdout);
 
-        if (envelope === null && !isDispatchVerbNotFound(attempt.stdout)) {
+        if (envelope?.state === "pending") {
+          confirmedRunning = true;
+        } else if (envelope === null && !isDispatchVerbNotFound(attempt.stdout)) {
           // A served reply that is neither a shim envelope nor Obsidian's
           // not-found answer for the dispatch verb. The known producer is a
           // renderer teardown mid-request (Obsidian's main process converts
@@ -487,7 +534,7 @@ export async function runRecoverableExec(
             );
           }
           installId = reinstalledId;
-          payload = buildDispatchPayload(installId, nonce, command, args, entryTtl());
+          completedPolls = 0;
           shouldSend = true;
           await sleep(Math.max(0, Math.min(DISPATCH_POLL_INTERVAL_MS, remaining())));
           continue;
@@ -496,7 +543,6 @@ export async function runRecoverableExec(
         if (envelope !== null && envelope.state === "done") {
           return synthesizeExecResult(ctx.bin, directArgv, envelope.reply);
         }
-        // Unknown fate falls through to the poll phase.
       } catch (error) {
         if (error instanceof ObsidianCommandDispatchError) {
           throw error;
@@ -529,8 +575,6 @@ export async function runRecoverableExec(
       );
 
       if (poll === null || poll.installId !== installId) {
-        // Polls only run after a timed-out attempt, whose fate is unknown; a
-        // wiped or regenerated registry makes that fate unknowable.
         throw contextReset(installId);
       }
 
@@ -544,6 +588,7 @@ export async function runRecoverableExec(
         // Same generation and no registry entry: the attempt provably never
         // dispatched (a delayed duplicate that fires later is dedup'd by the
         // nonce). Resend.
+        completedPolls = 0;
         shouldSend = true;
         await sleep(Math.max(0, Math.min(DISPATCH_POLL_INTERVAL_MS, remaining())));
         continue;
@@ -555,7 +600,8 @@ export async function runRecoverableExec(
       lastError = error;
     }
 
-    await sleep(Math.max(0, Math.min(DISPATCH_POLL_INTERVAL_MS, remaining())));
+    const pollDelayMs = dispatchPollDelayMs(++completedPolls);
+    await sleep(Math.max(0, Math.min(pollDelayMs, remaining())));
   }
 
   if (confirmedRunning) {
