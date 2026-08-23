@@ -11,6 +11,34 @@ export type ReadyProbe =
   | { kind: "command"; args: string[]; match: string };
 
 /**
+ * Android-emulator runner config, authored as the optional `android` block of
+ * `obsidian-e2e.config.mjs`. Only `avd` is required to use the `android`
+ * subcommands; every other field has a default applied by
+ * {@link loadRunnerConfig}. The AVD itself is a prerequisite the runner never
+ * creates (a one-time `sdkmanager`/`avdmanager` setup per machine).
+ */
+export interface AndroidConfig {
+  avd: string;
+  /** Path to the Obsidian Android APK; only needed until the app is installed on the AVD. */
+  apk?: string;
+  adbBin?: string;
+  emulatorBin?: string;
+  /** Host TCP port forwarded to the app's webview devtools socket. */
+  cdpPort?: number;
+  bootTimeoutMs?: number;
+}
+
+/** {@link AndroidConfig} after validation and default resolution. */
+export interface ResolvedAndroidConfig {
+  avd: string;
+  apk?: string;
+  adbBin: string;
+  emulatorBin: string;
+  cdpPort: number;
+  bootTimeoutMs: number;
+}
+
+/**
  * Per-repo runner config, authored as `obsidian-e2e.config.mjs` at the worktree
  * root. Only `pluginId` is required; every other field has a default applied by
  * {@link loadRunnerConfig}.
@@ -27,6 +55,7 @@ export interface RunnerConfig {
   profileRoot?: string;
   appName?: string;
   obsidianBin?: string;
+  android?: AndroidConfig;
 }
 
 /** {@link RunnerConfig} after discovery, validation, and default resolution. */
@@ -42,6 +71,8 @@ export interface ResolvedRunnerConfig {
   profileRoot: string;
   appName: string;
   obsidianBin: string;
+  /** Undefined when the config has no `android` block; the `android` subcommands then refuse to run. */
+  android?: ResolvedAndroidConfig;
 }
 
 export interface ProvisionRawOptions {

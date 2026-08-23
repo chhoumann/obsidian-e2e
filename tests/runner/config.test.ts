@@ -112,3 +112,50 @@ describe("resolveRunnerConfig", () => {
     });
   });
 });
+
+describe("resolveRunnerConfig android block", () => {
+  test("is absent when the config has no android block", () => {
+    expect(resolveRunnerConfig({ pluginId: "quickadd" }).android).toBeUndefined();
+  });
+
+  test("resolves defaults around the one required field", () => {
+    const config = resolveRunnerConfig({ pluginId: "quickadd", android: { avd: "qa-e2e" } });
+    expect(config.android).toEqual({
+      avd: "qa-e2e",
+      apk: undefined,
+      adbBin: "adb",
+      emulatorBin: "emulator",
+      cdpPort: 9222,
+      bootTimeoutMs: 240_000,
+    });
+  });
+
+  test("keeps explicit values", () => {
+    const config = resolveRunnerConfig({
+      pluginId: "quickadd",
+      android: {
+        avd: "qa-e2e",
+        apk: "/apks/Obsidian.apk",
+        adbBin: "/sdk/adb",
+        emulatorBin: "/sdk/emulator",
+        cdpPort: 9333,
+        bootTimeoutMs: 60_000,
+      },
+    });
+    expect(config.android?.apk).toBe("/apks/Obsidian.apk");
+    expect(config.android?.cdpPort).toBe(9333);
+    expect(config.android?.bootTimeoutMs).toBe(60_000);
+  });
+
+  test("rejects a missing avd", () => {
+    expect(() => resolveRunnerConfig({ pluginId: "quickadd", android: {} })).toThrow(
+      /invalid "android.avd"/,
+    );
+  });
+
+  test("rejects a non-integer cdpPort", () => {
+    expect(() =>
+      resolveRunnerConfig({ pluginId: "quickadd", android: { avd: "a", cdpPort: "9222" } }),
+    ).toThrow(/invalid "android.cdpPort"/);
+  });
+});

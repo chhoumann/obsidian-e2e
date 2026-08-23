@@ -202,7 +202,12 @@ async function writeAppJson(appJsonPath: string): Promise<void> {
   await writeJson(appJsonPath, { ...existing, ...ENFORCED_APP_CONFIG });
 }
 
-async function assertRequiredPluginFiles(
+/**
+ * Throw with a "build first" hint when any configured plugin artifact is
+ * missing from the worktree. Shared with the android runner, which pushes the
+ * same artifacts to the device instead of symlinking them.
+ */
+export async function assertRequiredPluginFiles(
   worktreePath: string,
   config: ResolvedRunnerConfig,
 ): Promise<void> {
