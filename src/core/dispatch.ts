@@ -60,15 +60,8 @@ const DISPATCH_ENTRY_TTL_MARGIN_MS = 60_000;
 const DISPATCH_EVICTION_SCAN_LIMIT = 50;
 const DISPATCH_GRACE_MS = 1_500;
 const DISPATCH_MAX_GRACE_MS = 5_000;
-
-/**
- * Process budget for a single dispatch attempt. The shim answers inside
- * DISPATCH_GRACE_MS or with `{state:'pending'}`, so this only has to cover
- * grace plus bridge slack. A lost reply or a pending ack both fall into
- * polling. A command still running when the budget kills the CLI process is
- * unaffected in-app.
- */
-const DISPATCH_ATTEMPT_TIMEOUT_MS = 2_500;
+const DISPATCH_ATTEMPT_SLACK_MS = 1_000;
+const DISPATCH_ATTEMPT_TIMEOUT_MS = DISPATCH_GRACE_MS + DISPATCH_ATTEMPT_SLACK_MS;
 /** Budget for internal install/poll commands; mirrors the evalJsonAsync value. */
 const DISPATCH_INTERNAL_TIMEOUT_MS = 10_000;
 const DISPATCH_POLL_INTERVAL_MS = 100;
