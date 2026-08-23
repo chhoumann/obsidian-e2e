@@ -190,11 +190,17 @@ export async function runAndroidCli(
       try {
         const evaluated = await client.evaluate(code);
         if (evaluated.exception) {
+          if (options.json) emit(out, JSON.stringify({ exception: evaluated.exception }));
           emit(err, `Evaluation failed: ${evaluated.exception}`);
           return 1;
         }
         const value = evaluated.value;
-        emit(out, `=> ${typeof value === "string" ? value : JSON.stringify(value)}`);
+        if (options.json) {
+          // Wrapped so an `undefined` result still yields a parseable document.
+          emit(out, JSON.stringify({ value: value ?? null }));
+        } else {
+          emit(out, `=> ${typeof value === "string" ? value : JSON.stringify(value)}`);
+        }
         return 0;
       } finally {
         client.close();

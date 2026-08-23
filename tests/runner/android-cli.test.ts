@@ -89,6 +89,25 @@ describe("runAndroidCli", () => {
     expect(streams.out.join("")).toContain("=> quickadd-main");
   });
 
+  test("run --json emits a parseable JSON document instead of the arrow line", async () => {
+    const streams = makeStreams();
+    const code = await runAndroidCli(["run", "--json", "--", "eval", "code=app.vault.getName()"], {
+      stdout: streams.stdout,
+      stderr: streams.stderr,
+      loadRunnerConfig: () => Promise.resolve(androidConfig),
+      ensureAndroidInstance: () => Promise.resolve(ensureResult),
+      connectCdp: () =>
+        Promise.resolve({
+          evaluate: () => Promise.resolve({ value: "quickadd-main" }),
+          close: () => {},
+        } as never),
+      ensureDeps: { adb: { execFile: () => Promise.reject(new Error("unused")) } },
+    });
+    expect(code).toBe(0);
+    expect(JSON.parse(streams.out.join(""))).toEqual({ value: "quickadd-main" });
+    expect(streams.out.join("")).not.toContain("=>");
+  });
+
   test("run rejects a non-eval command with the no-CLI explanation", async () => {
     const streams = makeStreams();
     const code = await runAndroidCli(["run", "--", "quickadd:list"], {

@@ -65,3 +65,35 @@ describe("CdpClient", () => {
     ).rejects.toThrow(/No debuggable page target on CDP port 9222/);
   });
 });
+
+describe("CdpClient protocol errors", () => {
+  test("a top-level CDP error surfaces as an exception, not a successful undefined", async () => {
+    const sent: string[] = [];
+    let listener: (data: string) => void = () => {};
+    const socket: CdpSocket = {
+      send: (data) => {
+        sent.push(data);
+        const message = JSON.parse(data) as { id: number };
+        queueMicrotask(() =>
+          listener(
+            JSON.stringify({
+              id: message.id,
+              error: { message: "Execution context was destroyed." },
+            }),
+          ),
+        );
+      },
+      close: () => {},
+      onMessage: (l) => {
+        listener = l;
+      },
+    };
+    const client = await CdpClient.connect(9222, {
+      fetchJson: () => Promise.resolve([{ type: "page", webSocketDebuggerUrl: "ws://fake" }]),
+      connect: () => Promise.resolve(socket),
+    });
+    const result = await client.evaluate("1");
+    expect(result.exception).toBe("CDP protocol error: Execution context was destroyed.");
+    expect(result.value).toBeUndefined();
+  });
+});

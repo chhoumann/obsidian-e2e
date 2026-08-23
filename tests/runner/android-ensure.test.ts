@@ -204,3 +204,33 @@ describe("stopAndroidInstance", () => {
     expect(await stopAndroidInstance(android, deps)).toEqual({ stopped: false, serial: null });
   });
 });
+
+describe("provisioning guards", () => {
+  test("an explicit but missing --data seed fails instead of silently seeding defaultData", async () => {
+    const state: HarnessState = {
+      installed: true,
+      currentVault: "quickadd-main",
+      dataJsonOnDevice: false,
+    };
+    const { deps } = harness(state);
+    deps.dataSeedExists = () => Promise.resolve(false);
+
+    await expect(
+      ensureAndroidInstance({ ...options, dataPath: "/nope/data.json" }, config, android, deps),
+    ).rejects.toThrow(/--data seed \/nope\/data\.json does not exist/);
+  });
+
+  test("device paths reach adb shell single-quoted so a quoted vault name cannot escape", async () => {
+    const state: HarnessState = {
+      installed: true,
+      currentVault: "it's-a-vault",
+      dataJsonOnDevice: true,
+    };
+    const { adbCalls, deps } = harness(state);
+
+    await ensureAndroidInstance({ ...options, vaultName: "it's-a-vault" }, config, android, deps);
+
+    const mkdir = adbCalls.find((c) => c.includes("mkdir -p"));
+    expect(mkdir).toContain("it'\\''s-a-vault");
+  });
+});

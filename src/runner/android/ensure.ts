@@ -1,6 +1,6 @@
 import path from "node:path";
 
-import { pathExists } from "../fs-utils";
+import { pathExists, shellQuote } from "../fs-utils";
 import { assertRequiredPluginFiles } from "../provision";
 import type { ResolvedAndroidConfig, ResolvedRunnerConfig } from "../types";
 import {
@@ -127,9 +127,15 @@ async function provisionDeviceVault(
   const assertArtifacts = deps.assertArtifacts ?? assertRequiredPluginFiles;
   const dataSeedExists = deps.dataSeedExists ?? pathExists;
   await assertArtifacts(options.worktreePath, config);
+  // An explicit --data seed that does not exist is a caller mistake (a typo
+  // would otherwise silently provision defaultData); fail like the desktop
+  // provisioner's copyFile would.
+  if (options.dataPath && !(await dataSeedExists(options.dataPath))) {
+    throw new Error(`The --data seed ${options.dataPath} does not exist.`);
+  }
 
   const pluginPath = `${vaultPath}/.obsidian/plugins/${config.pluginId}`;
-  await adbShell(target, `mkdir -p '${pluginPath}'`, deps.adb);
+  await adbShell(target, `mkdir -p ${shellQuote(pluginPath)}`, deps.adb);
 
   for (const fileName of config.pluginArtifacts) {
     await adb(
@@ -142,24 +148,24 @@ async function provisionDeviceVault(
 
   const dataOnDevice = await adbShell(
     target,
-    `test -f '${pluginPath}/data.json' && echo yes || echo no`,
+    `test -f ${shellQuote(`${pluginPath}/data.json`)} && echo yes || echo no`,
     deps.adb,
   );
   if (dataOnDevice !== "yes") {
-    if (options.dataPath && (await dataSeedExists(options.dataPath))) {
+    if (options.dataPath) {
       await adb(target, ["push", options.dataPath, `${pluginPath}/data.json`], deps.adb, 60_000);
     } else {
       const json = JSON.stringify(config.defaultData ?? {});
       await adbShell(
         target,
-        `printf '%s' '${json.replaceAll("'", "'\\''")}' > '${pluginPath}/data.json'`,
+        `printf '%s' ${shellQuote(json)} > ${shellQuote(`${pluginPath}/data.json`)}`,
         deps.adb,
       );
     }
   }
 
   const uid = await appUid(target, deps.adb);
-  await adbShell(target, `chown -R ${uid}:ext_data_rw '${vaultPath}'`, deps.adb);
+  await adbShell(target, `chown -R ${uid}:ext_data_rw ${shellQuote(vaultPath)}`, deps.adb);
 }
 
 /**
@@ -204,8 +210,8 @@ export async function ensureAndroidInstance(
   if ((await currentVaultName(android.cdpPort, cdp)) !== options.vaultName) {
     log(`Selecting vault "${options.vaultName}" on ${serial}.`);
     const uid = await appUid(target, deps.adb);
-    await adbShell(target, `mkdir -p '${vaultPath}/.obsidian'`, deps.adb);
-    await adbShell(target, `chown -R ${uid}:ext_data_rw '${vaultPath}'`, deps.adb);
+    await adbShell(target, `mkdir -p ${shellQuote(`${vaultPath}/.obsidian`)}`, deps.adb);
+    await adbShell(target, `chown -R ${uid}:ext_data_rw ${shellQuote(vaultPath)}`, deps.adb);
     await evaluate(
       android.cdpPort,
       `localStorage.setItem(${JSON.stringify(SELECTED_VAULT_KEY)}, ${JSON.stringify(options.vaultName)}); location.reload(); true`,

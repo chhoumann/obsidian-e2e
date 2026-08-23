@@ -119,6 +119,16 @@ export class CdpClient {
       returnByValue: true,
       timeout: EVALUATE_TIMEOUT_MS,
     });
+    // A top-level protocol error (evaluation timeout, destroyed execution
+    // context, ...) carries no `result` at all; without this it would read as
+    // a successful `undefined` evaluation.
+    const protocolError = response.error as { message?: string } | undefined;
+    if (protocolError) {
+      return {
+        value: undefined,
+        exception: `CDP protocol error: ${protocolError.message ?? "unknown"}`,
+      };
+    }
     const result = response.result as
       | {
           result?: { value?: unknown };
