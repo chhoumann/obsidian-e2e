@@ -990,8 +990,10 @@ with `recoverable: true | false`.
 
 When the result cannot be produced, `exec()` throws
 `ObsidianCommandDispatchError` whose `reason` names the precise transport
-state. Recoverable timeouts still surface as `ObsidianCommandDispatchError`
-with `ObsidianCommandTimeoutError` as `causeError`.
+state. When a lost reply (a CLI transport timeout) drove the failure, that
+`ObsidianCommandTimeoutError` is attached as `causeError`; a clean
+`still-pending` timeout - every acknowledgement succeeded and the handler
+simply has not settled - carries no cause.
 
 - `ambiguous-delivery`: no dispatch attempt was acknowledged and no in-app
   record appeared; the command may or may not have started, and cannot have
