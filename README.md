@@ -155,6 +155,60 @@ pace.
 | `OBSIDIAN_BIN`                                          | `start`                    | only when a non-default `--obsidian-bin` is set        |
 | `<PREFIX>_E2E_VAULT` / `_VAULT_PATH` / `_OBSIDIAN_HOME` | both, when `envPrefix` set | legacy aliases during migration                        |
 
+### Android (emulator)
+
+The `android` family runs the plugin inside the **real Obsidian Android app**
+on an emulator - the only way to exercise genuine mobile behavior (touch
+long-press drags, `Platform.isMobile` code paths, the mobile settings UI)
+rather than desktop mobile-emulation. The app is driven over its webview
+devtools socket (Obsidian mobile ships with webview debugging enabled), so the
+runner needs no obsidian CLI on the device.
+
+One-time machine setup (the runner never does this for you):
+
+```bash
+# An AVD from a google_apis image - it must be adb-rootable, so NOT a
+# Play-Store image. KVM access is required for x86_64 emulation.
+sdkmanager "platform-tools" "emulator" "system-images;android-34;google_apis;x86_64"
+avdmanager create avd -n obsidian-e2e -k "system-images;android-34;google_apis;x86_64"
+# The official APK is published as a release asset on obsidianmd/obsidian-releases.
+```
+
+Then add the `android` block to `obsidian-e2e.config.mjs`:
+
+```js
+export default {
+  pluginId: "your-plugin",
+  // ...desktop config...
+  android: {
+    avd: "obsidian-e2e", // required: the AVD name to boot/reuse
+    apk: "apks/Obsidian.apk", // only needed until the app is installed on the AVD
+    adbBin: "adb", // default
+    emulatorBin: "emulator", // default
+    cdpPort: 9222, // host port forwarded to the webview devtools socket
+    bootTimeoutMs: 240_000,
+  },
+};
+```
+
+- `android start` - boot (or reuse) the AVD, install the app if needed, create
+  and select the vault, push the plugin artifacts and the `data.json` seed
+  (first provision only), enable the plugin, and run the ready probe. Supports
+  `--print-env` (emitting `OBSIDIAN_E2E_ANDROID_SERIAL`, `_CDP_PORT`, `_VAULT`,
+  `_VAULT_PATH`) and `--json`.
+- `android run [-- eval code=<js>]` - bring the instance up, then evaluate the
+  expression in the app over CDP and print `=> <value>`. Only the `eval`
+  spelling is supported (there is no obsidian CLI socket on Android); a
+  command-kind `readyProbe` likewise falls back to the plugin-loaded check.
+- `android stop` - force-stop the app and shut the emulator down.
+
+Vault provisioning writes no first-run UI automation: app-storage vaults are
+plain folders under the app's external files dir, and the opened vault is
+whatever webview-localStorage `mobile-selected-vault` names - the runner
+creates the folder over `adb root` and flips that key over CDP. Real touch
+gestures for tests go through `adb shell input` against the booted serial;
+sub-100ms timing needs CDP `Input.dispatchTouchEvent`.
+
 ### Safety notes
 
 - **Version guard.** `start` and `run` refuse to launch (or to reuse a warm

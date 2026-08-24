@@ -19,6 +19,7 @@ import {
   provisionVault as realProvisionVault,
   resolveProvisionOptions,
 } from "./provision";
+import { runAndroidCli, type AndroidCliDependencies } from "./android/cli";
 import { assertSecureDirIfPresent, ensureSecureDir } from "./security";
 import {
   reapOrphanedInstances as realReapOrphanedInstances,
@@ -59,9 +60,11 @@ export interface CliDependencies {
   killSelf?: (signal: NodeJS.Signals) => void;
   /** Threaded into the launcher calls so tests never spawn a real Obsidian. */
   exec?: ObsidianExecDependencies;
+  /** Threaded into the android family so tests never touch adb or a device. */
+  android?: AndroidCliDependencies;
 }
 
-const SUBCOMMANDS = ["provision", "start", "stop", "run"] as const;
+const SUBCOMMANDS = ["provision", "start", "stop", "run", "android"] as const;
 type Subcommand = (typeof SUBCOMMANDS)[number];
 
 const PROVISION_SPEC: ArgsParserSpec = {
@@ -161,6 +164,18 @@ export async function runObsidianE2ECli(
     emitLine(err, `Unknown command: ${maybeSubcommand}`);
     emitLine(err, topLevelHelp());
     return 1;
+  }
+
+  // The android family owns its own sub-subcommand, flag spec, and config load
+  // (its `--config`/`--worktree` appear after the sub-subcommand token).
+  if (maybeSubcommand === "android") {
+    return runAndroidCli(rest, {
+      cwd: deps.cwd,
+      stdout: deps.stdout,
+      stderr: deps.stderr,
+      loadRunnerConfig: deps.loadRunnerConfig,
+      ...deps.android,
+    });
   }
 
   const spec = specFor(maybeSubcommand);
@@ -387,7 +402,7 @@ function isSubcommand(value: string): value is Subcommand {
   return (SUBCOMMANDS as readonly string[]).includes(value);
 }
 
-function specFor(subcommand: Subcommand): ArgsParserSpec {
+function specFor(subcommand: Exclude<Subcommand, "android">): ArgsParserSpec {
   switch (subcommand) {
     case "provision":
       return PROVISION_SPEC;
@@ -455,12 +470,13 @@ function topLevelHelp(): string {
     "  start       Provision, prepare the profile, and bring the instance up and verified.",
     "  stop        Terminate this worktree's instance and remove its profile.",
     "  run         Bring the instance up, then forward a command to the obsidian CLI.",
+    "  android     Drive the real Obsidian Android app on an emulator (start|stop|run).",
     "",
     "Run `obsidian-e2e <command> --help` for per-command flags.",
   ].join("\n");
 }
 
-function subcommandHelp(subcommand: Subcommand): string {
+function subcommandHelp(subcommand: Exclude<Subcommand, "android">): string {
   switch (subcommand) {
     case "provision":
       return [

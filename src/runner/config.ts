@@ -3,7 +3,7 @@ import { pathToFileURL } from "node:url";
 
 import { isRecord } from "../core/errors";
 import { pathExists } from "./fs-utils";
-import type { ReadyProbe, ResolvedRunnerConfig } from "./types";
+import type { ReadyProbe, ResolvedAndroidConfig, ResolvedRunnerConfig } from "./types";
 
 export const CONFIG_FILE_NAME = "obsidian-e2e.config.mjs";
 
@@ -75,7 +75,41 @@ export function resolveRunnerConfig(
       optionalString(raw.profileRoot, "profileRoot", source) ?? `/tmp/${pluginId}-obsidian-e2e`,
     appName: optionalString(raw.appName, "appName", source) ?? "Obsidian",
     obsidianBin: optionalString(raw.obsidianBin, "obsidianBin", source) ?? "obsidian",
+    android: resolveAndroidConfig(raw.android, source),
   };
+}
+
+const DEFAULT_ANDROID_CDP_PORT = 9222;
+const DEFAULT_ANDROID_BOOT_TIMEOUT_MS = 240_000;
+
+function resolveAndroidConfig(value: unknown, source: string): ResolvedAndroidConfig | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) {
+    throw new Error(`${source} has invalid "android": expected an object.`);
+  }
+  return {
+    avd: requireString(value.avd, "android.avd", source),
+    apk: optionalString(value.apk, "android.apk", source),
+    adbBin: optionalString(value.adbBin, "android.adbBin", source) ?? "adb",
+    emulatorBin: optionalString(value.emulatorBin, "android.emulatorBin", source) ?? "emulator",
+    cdpPort:
+      optionalPositiveInteger(value.cdpPort, "android.cdpPort", source) ?? DEFAULT_ANDROID_CDP_PORT,
+    bootTimeoutMs:
+      optionalPositiveInteger(value.bootTimeoutMs, "android.bootTimeoutMs", source) ??
+      DEFAULT_ANDROID_BOOT_TIMEOUT_MS,
+  };
+}
+
+function optionalPositiveInteger(
+  value: unknown,
+  field: string,
+  source: string,
+): number | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
+    throw new Error(`${source} has invalid "${field}": expected a positive integer.`);
+  }
+  return value;
 }
 
 function resolveReadyProbe(value: unknown, pluginId: string, source: string): ReadyProbe {
