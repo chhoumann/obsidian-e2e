@@ -4,7 +4,11 @@ import { createObsidianClient } from "../../src/core/client";
 import {
   DISPATCH_COMMAND,
   buildDispatchShimCode,
+  createDispatchState,
+  dispatchPollDelayMs,
+  isUnsupportedCached,
   parseDispatchEnvelope,
+  runRecoverableExec,
 } from "../../src/core/dispatch";
 import {
   ObsidianCommandDispatchError,
@@ -75,6 +79,7 @@ function createDispatchHarness(handlers: Record<string, CommandHandler>) {
   globals.handleCli = realHandleCli;
 
   const delayed: Array<() => Promise<string>> = [];
+  const dispatchReplies: string[] = [];
   const requests: string[][] = [];
   let behaviorFor: (request: ExecuteRequest) => RequestBehavior = () => undefined;
 
@@ -145,6 +150,9 @@ function createDispatchHarness(handlers: Record<string, CommandHandler>) {
     }
 
     const output = await served;
+    if (command === DISPATCH_COMMAND) {
+      dispatchReplies.push(output);
+    }
 
     return createExecResult(request.bin, request.argv, output ? `${output}\n` : "");
   };
@@ -157,6 +165,7 @@ function createDispatchHarness(handlers: Record<string, CommandHandler>) {
         vault: "test",
       }),
     delayed,
+    dispatchReplies,
     flushDelayed: async () => {
       const pending = delayed.splice(0);
       return Promise.all(pending.map((fire) => fire()));
@@ -166,6 +175,7 @@ function createDispatchHarness(handlers: Record<string, CommandHandler>) {
     setBehavior: (next: (request: ExecuteRequest) => RequestBehavior) => {
       behaviorFor = next;
     },
+    transport,
   };
 }
 
@@ -178,6 +188,39 @@ function installRequests(requests: string[][]): string[][] {
     (argv) => argv[1] === "eval" && (argv[2] ?? "").includes("window.handleCli"),
   );
 }
+
+describe("dispatch protocol helpers", () => {
+  it("parses pending and stale envelopes without rejecting extra keys", () => {
+    expect(
+      parseDispatchEnvelope(
+        JSON.stringify({ installId: "gen-1", reply: "ignored", state: "pending", extra: true }),
+      ),
+    ).toEqual({ installId: "gen-1", state: "pending" });
+    expect(
+      parseDispatchEnvelope(
+        JSON.stringify({ installId: "gen-1", reply: "ignored", state: "stale", extra: true }),
+      ),
+    ).toEqual({ installId: "gen-1", state: "stale" });
+    expect(parseDispatchEnvelope(JSON.stringify({ installId: "gen-1", state: "done" }))).toBeNull();
+    expect(
+      parseDispatchEnvelope(JSON.stringify({ installId: "gen-1", reply: 42, state: "done" })),
+    ).toBeNull();
+  });
+
+  it("backs polls off from immediate to one second", () => {
+    expect(
+      Array.from({ length: 7 }, (_, completedPolls) => dispatchPollDelayMs(completedPolls)),
+    ).toEqual([0, 100, 200, 400, 800, 1_000, 1_000]);
+  });
+
+  it("expires unsupported capability cache entries after one minute", () => {
+    const state = createDispatchState();
+    state.unsupportedAt = 1_000;
+
+    expect(isUnsupportedCached(state, 60_999)).toBe(true);
+    expect(isUnsupportedCached(state, 61_000)).toBe(false);
+  });
+});
 
 describe("runRecoverableExec via client.exec", () => {
   it("dispatches through the shim and returns a CLI-faithful result", async () => {
@@ -372,7 +415,7 @@ describe("runRecoverableExec via client.exec", () => {
     expect(installRequests(harness.requests)).toHaveLength(2);
   });
 
-  it("reports still-pending when the handler never settles", async () => {
+  it("reports still-pending when a lost reply leaves the handler running", async () => {
     const harness = createDispatchHarness({
       forever: () => new Promise(() => {}),
     });
@@ -385,6 +428,23 @@ describe("runRecoverableExec via client.exec", () => {
 
     expect(error).toBeInstanceOf(ObsidianCommandDispatchError);
     expect((error as ObsidianCommandDispatchError).reason).toBe("still-pending");
+  });
+
+  it("reports still-pending after a clean pending acknowledgement", async () => {
+    const harness = createDispatchHarness({
+      forever: () => new Promise(() => {}),
+    });
+    const client = harness.createClient();
+
+    const error = await client.exec("forever", {}, { timeoutMs: 350 }).catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(ObsidianCommandDispatchError);
+    expect((error as ObsidianCommandDispatchError).reason).toBe("still-pending");
+    expect(harness.dispatchReplies.map((reply) => parseDispatchEnvelope(reply))).toContainEqual({
+      installId: expect.any(String),
+      state: "pending",
+    });
+    expect(dispatchRequests(harness.requests)).toHaveLength(1);
   });
 
   it("reports ambiguous-delivery when nothing is ever acknowledged", async () => {
@@ -542,8 +602,31 @@ describe("runRecoverableExec via client.exec", () => {
     await expect(client.exec("greet")).resolves.toMatchObject({ stdout: "hello\n" });
 
     expect(dispatchRequests(harness.requests)).toHaveLength(0);
-    // The unsupported answer is cached: one install probe, ever.
     expect(installRequests(harness.requests)).toHaveLength(1);
+  });
+
+  it("re-probes an unsupported app after the cache window", async () => {
+    const harness = createDispatchHarness({ greet: () => "hello" });
+    delete (globalThis as MutableGlobal).handleCli;
+    const state = createDispatchState();
+    const context = {
+      bin: "obsidian",
+      state,
+      transport: harness.transport,
+      vault: "test",
+    };
+
+    await expect(runRecoverableExec(context, "greet", {}, {})).resolves.toMatchObject({
+      stdout: "hello\n",
+    });
+    expect(state.unsupportedAt).not.toBeNull();
+
+    state.unsupportedAt = Date.now() - 60_001;
+    await expect(runRecoverableExec(context, "greet", {}, {})).resolves.toMatchObject({
+      stdout: "hello\n",
+    });
+
+    expect(installRequests(harness.requests)).toHaveLength(2);
   });
 
   it("carries dev.evalJson through the dispatch protocol end to end", async () => {
@@ -560,6 +643,85 @@ describe("runRecoverableExec via client.exec", () => {
 });
 
 describe("dispatch shim", () => {
+  it("returns done in one roundtrip when the handler settles inside grace", async () => {
+    let runs = 0;
+    createDispatchHarness({
+      quick: () => {
+        runs += 1;
+        return "ok";
+      },
+    });
+    (0, eval)(buildDispatchShimCode("gen-1"));
+    const handleCli = (globalThis as MutableGlobal).handleCli as (
+      argv: string[],
+    ) => Promise<string>;
+
+    const reply = await handleCli([
+      DISPATCH_COMMAND,
+      `payload=${JSON.stringify({ argv: ["quick"], graceMs: 20, installId: "gen-1", nonce: "n1" })}`,
+    ]);
+
+    expect(JSON.parse(reply)).toEqual({
+      installId: "gen-1",
+      reply: "ok",
+      state: "done",
+    });
+    expect(runs).toBe(1);
+  });
+
+  it("returns pending after entry grace without dispatching a duplicate", async () => {
+    let runs = 0;
+    createDispatchHarness({
+      forever: () => {
+        runs += 1;
+        return new Promise(() => {});
+      },
+    });
+    (0, eval)(buildDispatchShimCode("gen-1"));
+    const handleCli = (globalThis as MutableGlobal).handleCli as (
+      argv: string[],
+    ) => Promise<string>;
+    const request = [
+      DISPATCH_COMMAND,
+      `payload=${JSON.stringify({ argv: ["forever"], graceMs: 20, installId: "gen-1", nonce: "n1" })}`,
+    ];
+
+    await expect(handleCli(request)).resolves.toBe(
+      JSON.stringify({ installId: "gen-1", state: "pending" }),
+    );
+    await expect(handleCli(request)).resolves.toBe(
+      JSON.stringify({ installId: "gen-1", state: "pending" }),
+    );
+    expect(runs).toBe(1);
+  });
+
+  it("joins duplicate arrivals before a fast handler settles", async () => {
+    let runs = 0;
+    createDispatchHarness({
+      quick: async () => {
+        runs += 1;
+        await sleep(20);
+        return "ok";
+      },
+    });
+    (0, eval)(buildDispatchShimCode("gen-1"));
+    const handleCli = (globalThis as MutableGlobal).handleCli as (
+      argv: string[],
+    ) => Promise<string>;
+    const request = [
+      DISPATCH_COMMAND,
+      `payload=${JSON.stringify({ argv: ["quick"], graceMs: 50, installId: "gen-1", nonce: "n1" })}`,
+    ];
+
+    const replies = await Promise.all([handleCli(request), handleCli(request)]);
+
+    expect(replies.map((reply) => JSON.parse(reply))).toEqual([
+      { installId: "gen-1", reply: "ok", state: "done" },
+      { installId: "gen-1", reply: "ok", state: "done" },
+    ]);
+    expect(runs).toBe(1);
+  });
+
   it("refuses payloads pinned to another registry generation without dispatching", async () => {
     let runs = 0;
     createDispatchHarness({
