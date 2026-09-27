@@ -23,6 +23,7 @@ import {
   resolveProvisionOptions,
 } from "./provision";
 import { runAndroidCli, type AndroidCliDependencies } from "./android/cli";
+import { runCaptureCli } from "../capture/cli";
 import { assertSecureDirIfPresent, ensureSecureDir } from "./security";
 import {
   reapOrphanedInstances as realReapOrphanedInstances,
@@ -68,7 +69,7 @@ export interface CliDependencies {
   android?: AndroidCliDependencies;
 }
 
-const SUBCOMMANDS = ["provision", "start", "stop", "run", "android"] as const;
+const SUBCOMMANDS = ["provision", "start", "stop", "run", "android", "capture"] as const;
 type Subcommand = (typeof SUBCOMMANDS)[number];
 
 const PROVISION_SPEC: ArgsParserSpec = {
@@ -184,6 +185,12 @@ export async function runObsidianE2ECli(
       loadRunnerConfig: deps.loadRunnerConfig,
       ...deps.android,
     });
+  }
+
+  // Capture primitives need no runner config: they talk to any Obsidian window
+  // exposing CDP (typically one started by `capture launch`).
+  if (maybeSubcommand === "capture") {
+    return runCaptureCli(rest, { stdout: deps.stdout, stderr: deps.stderr, env: deps.env });
   }
 
   const spec = specFor(maybeSubcommand);
@@ -435,7 +442,7 @@ function isSubcommand(value: string): value is Subcommand {
   return (SUBCOMMANDS as readonly string[]).includes(value);
 }
 
-function specFor(subcommand: Exclude<Subcommand, "android">): ArgsParserSpec {
+function specFor(subcommand: Exclude<Subcommand, "android" | "capture">): ArgsParserSpec {
   switch (subcommand) {
     case "provision":
       return PROVISION_SPEC;
@@ -504,12 +511,13 @@ function topLevelHelp(): string {
     "  stop        Terminate this worktree's instance and remove its profile.",
     "  run         Forward a command to the obsidian CLI, launching the instance if needed.",
     "  android     Drive the real Obsidian Android app on an emulator (start|stop|run).",
+    "  capture     Screenshot/recording primitives over CDP (launch|prepare|screenshot|record|...).",
     "",
     "Run `obsidian-e2e <command> --help` for per-command flags.",
   ].join("\n");
 }
 
-function subcommandHelp(subcommand: Exclude<Subcommand, "android">): string {
+function subcommandHelp(subcommand: Exclude<Subcommand, "android" | "capture">): string {
   switch (subcommand) {
     case "provision":
       return [

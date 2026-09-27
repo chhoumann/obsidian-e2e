@@ -33,8 +33,10 @@ Requirements:
   - optional `expect` matchers for vault and sandbox assertions
 - `obsidian-e2e/runner`
   - programmatic API for the instance runner (see below)
+- `obsidian-e2e/capture`
+  - screenshot/recording primitives over CDP (see "Screenshots And Recordings")
 - `obsidian-e2e` bin
-  - the `obsidian-e2e <provision|start|stop|run>` command
+  - the `obsidian-e2e <provision|start|stop|run|android|capture>` command
 
 ## Instance Runner (CLI)
 
@@ -252,6 +254,64 @@ need to orchestrate instances directly - `loadRunnerConfig`,
 `resolveProvisionOptions`, `provisionVault`, `resolveInstanceOptions`,
 `ensureObsidianInstance`, `stopInstance`, `reapOrphanedInstances`,
 `runObsidianE2ECli`, and the supporting types.
+
+## Screenshots And Recordings (`capture`)
+
+`obsidian-e2e capture` (and `obsidian-e2e/capture` programmatically) is a set of
+small, composable primitives for documentation screenshots and demo recordings
+of a live Obsidian window over the Chrome DevTools Protocol. It is deliberately
+not a scenario framework: drive the UI between calls with anything
+(`agent-browser --cdp <port>`, the `obsidian` CLI, `capture type`, your own
+CDP), and every capture command prints a JSON result whose sizes/durations were
+checked after writing.
+
+| Command                              | What it does                                                                                                                                                                                                                                                                                                             |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `launch --vault <dir>`               | Foreground capture instance: own HOME/profile, `--remote-debugging-port` (default 9333), real `--force-device-scale-factor` (default 2), `xvfb-run` on Linux without `$DISPLAY`. Separate from the runner's test instance. `--print-env` prints its exports.                                                             |
+| `prepare`                            | Waits until the window is capturable (reconnecting through reloads), sets the content size, theme, font and capture CSS, then verifies viewport, DPR, theme and that the font is really installed.                                                                                                                       |
+| `screenshot <out.png>`               | Viewport, `--selector`, top-most `--modal`, or any `--rect-js` expression; `--pad`, `--expand` (lift modal max-height), `--clean` (blur, drop suggestion popovers, no spellcheck squiggles). Cropped by Chromium at the real DPR; fails if the target is off-screen or the PNG is the wrong size.                        |
+| `type <text>`                        | Paced typing scheduled inside the page (one CDP call), so recordings stay real-time. Waits for the selector/focus.                                                                                                                                                                                                       |
+| `record <out.webm\|mp4> -- <cmd...>` | Screencast while `<cmd>` drives the UI. Frames are encoded with their real timestamps, so the video length matches wall-clock time. Non-zero exit, timeout (`--max-seconds`) or a signal discards the take and returns the same status; temp frames are always removed. `--cursor` draws a pointer for CDP mouse events. |
+| `gif`, `sheet`, `probe`              | Palette GIF (+ `gifsicle -O3 --lossy` when installed), a contact sheet for reviewing a take, and an ffprobe summary.                                                                                                                                                                                                     |
+
+Other page windows (e.g. Settings, which may open as a popout in Obsidian 1.13+)
+are addressed with `--window <title substring>`.
+
+Requirements: Obsidian desktop, `ffmpeg`, and on Linux `xvfb`/`xauth`;
+optional `gifsicle` and the fonts you ask for (Debian/Ubuntu:
+`apt-get install xvfb xauth ffmpeg gifsicle fonts-inter`). Node 22+ (global
+`WebSocket`).
+
+```bash
+# A vault to capture (any folder works; `provision` links the plugin build).
+# Delete .obsidian/core-plugins.json if you need core plugins such as the palette.
+obsidian-e2e provision --root /tmp/capture --vault Demo
+eval "$(obsidian-e2e capture launch --vault /tmp/capture/Demo --print-env)"
+amp orb service start obsidian-capture \
+  --command "pnpm exec obsidian-e2e capture launch --vault /tmp/capture/Demo"   # or tmux/terminal
+HOME=$OBSIDIAN_E2E_CAPTURE_HOME obsidian vault=Demo plugins:restrict off # enable community plugins
+
+obsidian-e2e capture prepare --width 1280 --height 800 --scale 2 \
+  --theme light --font Inter --hide-secret-warning
+obsidian-e2e capture screenshot modal.png --modal --pad 16 --clean
+obsidian-e2e capture record demo.webm --cursor -- ./drive-the-ui.sh
+obsidian-e2e capture gif demo.webm demo.gif && obsidian-e2e capture sheet demo.webm review.png
+```
+
+Notes from real captures:
+
+- Use a named `AGENT_BROWSER_SESSION` with `agent-browser --cdp <port>`;
+  `agent-browser connect` launches its own browser instead of attaching. Don't
+  mix in `agent-browser set viewport`: `prepare` sizes the real window so hit
+  testing and captures agree.
+- An app reload (including toggling desktop mobile emulation) drops injected
+  CSS; re-run `prepare`. Recordings survive reloads.
+- Tall content: `prepare --height 1900` plus `screenshot --expand`; screenshots
+  refuse targets that do not fit the viewport rather than capturing a clipped
+  image.
+- Desktop mobile-layout captures (`app.emulateMobile(true)`, then `prepare`
+  with a phone-sized window) show Obsidian's mobile layout inside the desktop
+  app; they are **not** captures from real mobile hardware or the Android app.
 
 ## Setup
 
