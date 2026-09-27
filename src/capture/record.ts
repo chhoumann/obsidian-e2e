@@ -670,7 +670,7 @@ export async function startRecording(
           ["-v", "error", "-y", ...source.inputArgs, ...encoderArgs(output, fps), staged.partial],
           stopOptions.signal,
         );
-        const info = await probeMedia(staged.partial);
+        const info = await probeMedia(staged.partial, stopOptions.signal);
         const wallSeconds = source.stopSeconds - source.startSeconds;
         if (
           info.durationSeconds === undefined ||

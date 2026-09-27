@@ -139,6 +139,14 @@ describe("capture launch", () => {
     expect(command.args).toContain(`--user-data-dir=${profile.home}/.config/obsidian`);
     expect(command.env.HOME).toBe(profile.home);
     expect(command.env.OBSIDIAN_E2E_CAPTURE_XVFB).toBe("1");
+    const wayland = {
+      ...options,
+      env: { WAYLAND_DISPLAY: "wayland-0", XDG_SESSION_TYPE: "wayland" },
+    };
+    const underXvfb = captureLaunchCommand(wayland, resolveCaptureProfile(wayland));
+    expect(underXvfb.file).toBe("xvfb-run");
+    expect(underXvfb.env.WAYLAND_DISPLAY).toBeUndefined();
+    expect(underXvfb.env.XDG_SESSION_TYPE).toBe("x11");
   });
 
   test("an existing DISPLAY or macOS runs the app directly", () => {

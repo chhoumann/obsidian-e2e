@@ -149,8 +149,14 @@ export function captureLaunchCommand(
     args: ["-a", "-s", `-screen 0 ${options.screen ?? DEFAULT_XVFB_SCREEN}`, app, ...appArgs],
     // Marks a private display nothing else draws on: `record --backend auto`
     // only picks x11grab there (see detectX11Target).
-    env: { ...childEnv, [DEDICATED_DISPLAY_ENV]: "1" },
+    env: withoutWayland({ ...childEnv, [DEDICATED_DISPLAY_ENV]: "1" }),
   };
+}
+
+/** Under Xvfb the app must not see (or prefer) an outer Wayland session. */
+function withoutWayland(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const { WAYLAND_DISPLAY: _wayland, WAYLAND_SOCKET: _socket, ...rest } = env;
+  return { ...rest, XDG_SESSION_TYPE: "x11" };
 }
 
 export function captureShellExports(profile: Omit<CaptureProfile, "warnings">): string {

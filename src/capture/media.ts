@@ -83,22 +83,26 @@ export interface MediaInfo {
 }
 
 /** ffprobe summary of an image/video: the verification step after every write. */
-export async function probeMedia(file: string): Promise<MediaInfo> {
+export async function probeMedia(file: string, signal?: AbortSignal): Promise<MediaInfo> {
   const stat = await fs.stat(file);
   if (stat.size === 0) throw new Error(`${file} is empty`);
   const raw = JSON.parse(
-    await runTool("ffprobe", [
-      "-v",
-      "error",
-      "-count_packets",
-      "-select_streams",
-      "v:0",
-      "-show_entries",
-      "stream=width,height,codec_name,nb_read_packets:format=duration",
-      "-of",
-      "json",
-      file,
-    ]),
+    await runTool(
+      "ffprobe",
+      [
+        "-v",
+        "error",
+        "-count_packets",
+        "-select_streams",
+        "v:0",
+        "-show_entries",
+        "stream=width,height,codec_name,nb_read_packets:format=duration",
+        "-of",
+        "json",
+        file,
+      ],
+      signal,
+    ),
   ) as { streams?: Array<Record<string, unknown>>; format?: { duration?: string } };
   const stream = raw.streams?.[0];
   if (!stream) throw new Error(`${file} has no video/image stream`);
