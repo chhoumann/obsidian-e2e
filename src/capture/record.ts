@@ -392,8 +392,12 @@ async function startX11Capture(
   child.stderr.on("data", (chunk: Buffer) => {
     stderr = (stderr + chunk.toString()).slice(-4000);
   });
+  let pendingLine = "";
   child.stdout.on("data", (chunk: Buffer) => {
-    for (const line of chunk.toString().split("\n")) {
+    // Records can be split across chunks: keep the trailing partial line.
+    const lines = (pendingLine + chunk.toString()).split("\n");
+    pendingLine = lines.pop() ?? "";
+    for (const line of lines) {
       const eq = line.indexOf("=");
       if (eq > 0) progress[line.slice(0, eq)] = line.slice(eq + 1).trim();
     }
