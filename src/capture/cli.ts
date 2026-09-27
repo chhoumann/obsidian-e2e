@@ -441,7 +441,9 @@ async function recordAroundCommand(
       err(
         `capture record: ${cancelledBy() ? `cancelled by ${cancelledBy()}` : timedOut ? "command timed out" : `command exited ${status}`}; recording discarded\n`,
       );
-      return status;
+      // A signal that arrived during cleanup still decides the exit status.
+      const lateSignal = cancelledBy();
+      return lateSignal ? signalStatus(lateSignal) : status;
     }
     const current = recording;
     recording = undefined;
