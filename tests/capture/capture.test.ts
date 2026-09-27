@@ -338,13 +338,14 @@ describe("capture type", () => {
   test("maps in-page outcomes to errors", async () => {
     const cases = [
       ["missing", /No element matches/],
+      ["noteditable", /not an editable element/],
       ["nofocus", /No editable element/],
       ["rejected", /does not accept text/],
     ] as const;
     for (const [outcome, message] of cases) {
       const fake = await fakeClient(() => value(outcome));
       await expect(
-        typeText(fake.client, "hi", { selector: outcome === "missing" ? ".x" : undefined }),
+        typeText(fake.client, "hi", { selector: outcome === "nofocus" ? undefined : ".x" }),
       ).rejects.toThrow(message);
     }
     const ok = await fakeClient(() => value("ok"));

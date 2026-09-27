@@ -214,7 +214,7 @@ export async function prepareCapture(
     await injectCss(client, STYLE_ID, css.join("\n"));
   }
 
-  const state = await evaluate<PreparedState & { fontProbe?: [number, number, string] }>(
+  const state = await evaluate<PreparedState & { fontProbe?: [boolean, string] }>(
     client,
     `(async () => { await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
       const out = { width: innerWidth, height: innerHeight, devicePixelRatio,
@@ -224,7 +224,10 @@ export async function prepareCapture(
           ? `const c = document.createElement("canvas").getContext("2d");
       const m = (f) => { c.font = f; return c.measureText("Hamburgefontsiv 0123 WMil").width; };
       const fam = ${JSON.stringify(JSON.stringify(options.font))};
-      out.fontProbe = [m("16px " + fam + ", monospace"), m("16px monospace"),
+      // A missing font falls back identically against both generics; an
+      // installed one differs from at least one (even if metric-compatible).
+      const differs = ["monospace", "serif"].some((g) => m("16px " + fam + ", " + g) !== m("16px " + g));
+      out.fontProbe = [differs,
         getComputedStyle(document.querySelector(".workspace") ?? document.body).fontFamily];`
           : ""
       }
@@ -238,9 +241,9 @@ export async function prepareCapture(
   };
   const problems: string[] = [];
   if (state.fontProbe && options.font) {
-    const [withFont, fallback, computed] = state.fontProbe;
-    result.font = { family: options.font, available: withFont !== fallback, computed };
-    if (withFont === fallback) {
+    const [available, computed] = state.fontProbe;
+    result.font = { family: options.font, available, computed };
+    if (!available) {
       problems.push(`font "${options.font}" is not installed (e.g. apt-get install fonts-inter)`);
     }
   }
@@ -481,17 +484,25 @@ export async function typeText(
       const editable = (e) => !!e && (e.isContentEditable || e.matches?.("input, textarea"));
       const deadline = Date.now() + ${Math.max(0, options.waitMs ?? 5000)};
       let el = null;
+      let found = false;
       while (true) {
         if (selector) {
           const target = document.querySelector(selector);
-          if (target) { target.focus(); el = target; }
+          if (target) {
+            found = true;
+            target.focus();
+            // Only accept an editable target that really took focus; otherwise
+            // insertText would land in whatever still holds the selection.
+            const active = document.activeElement;
+            if (editable(target) && (active === target || target.contains(active))) el = target;
+          }
         } else if (editable(document.activeElement)) {
           el = document.activeElement;
         }
         if (el || Date.now() > deadline) break;
         await new Promise((r) => setTimeout(r, 50));
       }
-      if (!el) return selector ? "missing" : "nofocus";
+      if (!el) return selector ? (found ? "noteditable" : "missing") : "nofocus";
       for (const ch of Array.from(${JSON.stringify(text)})) {
         if (!document.execCommand("insertText", false, ch)) return "rejected";
         await new Promise((r) => setTimeout(r, ${delay}));
@@ -500,6 +511,11 @@ export async function typeText(
   );
   if (outcome === "missing") {
     throw new Error(`No element matches ${JSON.stringify(options.selector)}`);
+  }
+  if (outcome === "noteditable") {
+    throw new Error(
+      `${JSON.stringify(options.selector)} is not an editable element that can take focus`,
+    );
   }
   if (outcome === "nofocus") {
     throw new Error("No editable element is focused to type into; pass a selector");
