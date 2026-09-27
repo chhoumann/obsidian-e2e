@@ -99,22 +99,28 @@ export async function connectCapture(options: ConnectOptions = {}): Promise<CdpC
       )) as CdpTargetInfo[];
       const candidates = targets.filter(matches);
       if (candidates.length === 0) lastError = `no matching page target on CDP port ${port}`;
+      // A broken/stale candidate (e.g. a closing popout) must not hide a
+      // healthy main window later in the list: handle failures per candidate.
       for (const candidate of candidates) {
-        const handshake = new AbortController();
-        client = await bounded(
-          CdpClient.connect(port, {
-            ...options.deps,
-            fetchJson: () => Promise.resolve([candidate]),
-            selectTarget: (list) => list[0],
-            signal: handshake.signal,
-          }),
-          (late) => late.close(),
-          handshake,
-        );
-        if (await bounded(evaluate<boolean>(client, readyExpression))) return client;
-        client.close();
+        try {
+          const handshake = new AbortController();
+          client = await bounded(
+            CdpClient.connect(port, {
+              ...options.deps,
+              fetchJson: () => Promise.resolve([candidate]),
+              selectTarget: (list) => list[0],
+              signal: handshake.signal,
+            }),
+            (late) => late.close(),
+            handshake,
+          );
+          if (await bounded(evaluate<boolean>(client, readyExpression))) return client;
+          lastError = wanted === undefined ? "main workspace not ready" : "window still loading";
+        } catch (error) {
+          lastError = error instanceof Error ? error.message : String(error);
+        }
+        client?.close();
         client = undefined;
-        lastError = wanted === undefined ? "main workspace not ready" : "window still loading";
       }
     } catch (error) {
       lastError = error instanceof Error ? error.message : String(error);

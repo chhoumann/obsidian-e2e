@@ -385,13 +385,16 @@ async function startX11Capture(target: X11Target, dir: string, fps: number): Pro
     throw new Error(`x11grab exited ${code} before capturing: ${stderr.trim() || "no output"}`);
   });
   try {
-    await Promise.race([
-      firstFrame,
-      failed,
-      sleep(10_000).then(() => {
-        throw new Error("x11grab produced no frame within 10 s");
-      }),
-    ]);
+    let startupTimer: ReturnType<typeof setTimeout> | undefined;
+    const startupTimeout = new Promise<never>((_, reject) => {
+      startupTimer = setTimeout(
+        () => reject(new Error("x11grab produced no frame within 10 s")),
+        10_000,
+      );
+    });
+    await Promise.race([firstFrame, failed, startupTimeout]).finally(() =>
+      clearTimeout(startupTimer),
+    );
   } catch (error) {
     child.kill("SIGKILL");
     throw error;
