@@ -71,7 +71,8 @@ export async function connectCapture(options: ConnectOptions = {}): Promise<CdpC
       : "document.readyState === 'complete'";
   const fetchJson =
     options.deps?.fetchJson ??
-    (async (url: string) => (await fetch(url)).json() as Promise<unknown>);
+    (async (url: string, signal?: AbortSignal) =>
+      (await fetch(url, { signal })).json() as Promise<unknown>);
   let lastError = "not attempted";
   // Every step (HTTP, WebSocket handshake, evaluate) is bounded by the deadline;
   // a client that connects after its attempt timed out is closed, not leaked.
@@ -94,8 +95,12 @@ export async function connectCapture(options: ConnectOptions = {}): Promise<CdpC
   while (true) {
     let client: CdpClient | undefined;
     try {
+      // Abort the HTTP request too when the deadline wins, so no socket lingers.
+      const listing = new AbortController();
       const targets = (await bounded(
-        fetchJson(`http://localhost:${port}/json`),
+        fetchJson(`http://localhost:${port}/json`, listing.signal),
+        undefined,
+        listing,
       )) as CdpTargetInfo[];
       const candidates = targets.filter(matches);
       if (candidates.length === 0) lastError = `no matching page target on CDP port ${port}`;

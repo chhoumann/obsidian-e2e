@@ -124,7 +124,8 @@ obsidian CLI, or 'capture type'.
   record <out.webm|out.mp4> [--fps 10] [--cursor] [--backend auto|x11|screencast]
          [--max-seconds 300] -- <command...>
       Record while <command> runs (env OBSIDIAN_E2E_CDP_PORT is set for it).
-      auto = x11grab of the window when on X11 (smoothest), else CDP screencast.
+      auto = x11grab (smoothest) on the private Xvfb display of \`capture launch\`,
+      else CDP screencast; --backend x11 forces x11grab on any X display.
       Non-zero exit/timeout/signal => no output file, same exit status.
   gif <in> <out.gif> [--width 1280] [--fps 8] [--colors 128] [--lossy 40]
   sheet <in> <out.png> [--every 1] [--columns 4] [--tile-width 480]

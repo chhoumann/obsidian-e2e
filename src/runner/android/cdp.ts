@@ -21,7 +21,7 @@ export interface CdpTargetInfo {
  * `connect` opens the page socket. Production uses global fetch/WebSocket.
  */
 export interface CdpDependencies {
-  fetchJson?: (url: string) => Promise<unknown>;
+  fetchJson?: (url: string, signal?: AbortSignal) => Promise<unknown>;
   connect?: (url: string, signal?: AbortSignal) => Promise<CdpSocket>;
   /** Abort a pending connection (closes a half-open WebSocket handshake). */
   signal?: AbortSignal;
@@ -57,19 +57,20 @@ const defaultConnect = async (url: string, signal?: AbortSignal): Promise<CdpSoc
     );
   }
   const ws = new WebSocket(url);
+  // `signal` only aborts the pending handshake; the listener is detached once
+  // it settles so a later abort cannot close a live client.
+  let onAbort: () => void = () => {};
   await new Promise<void>((resolve, reject) => {
     ws.onopen = () => resolve();
     ws.onerror = () =>
       reject(new Error(`Cannot connect to the webview devtools socket at ${url}.`));
-    signal?.addEventListener(
-      "abort",
-      () => {
-        ws.close();
-        reject(new Error(`Connection to ${url} aborted.`));
-      },
-      { once: true },
-    );
-  });
+    onAbort = () => {
+      ws.close();
+      reject(new Error(`Connection to ${url} aborted.`));
+    };
+    if (signal?.aborted) onAbort();
+    signal?.addEventListener("abort", onAbort, { once: true });
+  }).finally(() => signal?.removeEventListener("abort", onAbort));
   return {
     send: (data) => ws.send(data),
     close: () => ws.close(),
