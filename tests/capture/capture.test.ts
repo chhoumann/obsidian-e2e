@@ -137,6 +137,17 @@ describe("capture launch", () => {
     expect(command.args).toContain("--remote-debugging-port=9444");
   });
 
+  test("unsupported platforms need an explicit executable", () => {
+    const win = { vaultPath: "C:/v/D", platform: "win32" as const, env: {} };
+    expect(() => captureLaunchCommand(win, resolveCaptureProfile(win))).toThrow(
+      /pass --obsidian-app/,
+    );
+    const explicit = { ...win, obsidianApp: "C:/Obsidian/Obsidian.exe" };
+    expect(captureLaunchCommand(explicit, resolveCaptureProfile(explicit)).file).toBe(
+      "C:/Obsidian/Obsidian.exe",
+    );
+  });
+
   test("profile registers the vault and warns about an empty core-plugins.json", async () => {
     const dir = await createTempDir(tempDirectories, "capture-launch-");
     const vault = path.join(dir, "Vault");

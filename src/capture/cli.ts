@@ -351,13 +351,27 @@ async function recordAroundCommand(
   process.on("SIGTERM", onTerm);
   const signalStatus = (name: NodeJS.Signals) => 128 + (os.constants.signals[name] ?? 15);
   try {
-    recording = await startRecording(client, output, {
+    // Setup (CDP calls, starting ffmpeg) must stay cancellable too: race it
+    // against the signal and discard a recording that finishes starting late.
+    const starting = startRecording(client, output, {
       fps: num(flags, "fps"),
       quality: num(flags, "quality"),
       cursor: flags.cursor === true,
       keepFrames: flags["keep-failed-frames"] === true,
       backend: parseBackend(str(flags, "backend")),
     });
+    const cancelled = new Promise<undefined>((resolve) => {
+      if (cancel.signal.aborted) resolve(undefined);
+      cancel.signal.addEventListener("abort", () => resolve(undefined), { once: true });
+    });
+    recording = await Promise.race([starting, cancelled]);
+    if (!recording || received) {
+      void starting.then((late) => late.abort()).catch(() => {});
+      await recording?.abort();
+      recording = undefined;
+      err(`capture record: cancelled by ${received} before the take started\n`);
+      return signalStatus(received ?? "SIGTERM");
+    }
     const [file, ...commandArgs] = args.command;
     // Own process group, so a timeout/signal reaches the driver's children too.
     const child = spawn(file!, commandArgs, {

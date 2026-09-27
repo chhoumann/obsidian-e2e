@@ -53,9 +53,11 @@ export interface CaptureLaunchCommand {
 }
 
 function defaultObsidianApp(platform: NodeJS.Platform): string {
-  return platform === "darwin"
-    ? "/Applications/Obsidian.app/Contents/MacOS/Obsidian"
-    : "/opt/Obsidian/obsidian";
+  if (platform === "darwin") return "/Applications/Obsidian.app/Contents/MacOS/Obsidian";
+  if (platform === "linux") return "/opt/Obsidian/obsidian";
+  throw new Error(
+    `No default Obsidian executable for ${platform} (untested platform); pass --obsidian-app <path>`,
+  );
 }
 
 /** Pure path resolution; no filesystem access. */
