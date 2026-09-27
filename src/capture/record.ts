@@ -181,7 +181,8 @@ interface CapturedSource {
 }
 
 interface Capture {
-  finish(): Promise<CapturedSource>;
+  /** Finalize; every CDP call made here is time-bounded and aborts with `signal`. */
+  finish(signal?: AbortSignal): Promise<CapturedSource>;
   abort(): Promise<void>;
 }
 
@@ -199,6 +200,23 @@ function abortable<T>(step: Promise<T>, signal?: AbortSignal): Promise<T> {
     step.then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort));
   });
 }
+
+/** A finalize-time CDP call: rejects on timeout or when `signal` aborts. */
+async function boundedCall<T>(
+  step: Promise<T>,
+  signal: AbortSignal | undefined,
+  what: string,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`${what}: renderer did not answer within ${FINALIZE_TIMEOUT_MS} ms`)),
+      FINALIZE_TIMEOUT_MS,
+    );
+  });
+  return abortable(Promise.race([step, timeout]), signal).finally(() => clearTimeout(timer));
+}
+const FINALIZE_TIMEOUT_MS = 10_000;
 
 /** Cleanup must not hang on a renderer that stopped answering CDP. */
 const CLEANUP_TIMEOUT_MS = 3000;
@@ -254,7 +272,7 @@ async function startScreencastCapture(
   }
   return {
     abort: stopScreencast,
-    async finish() {
+    async finish(signal) {
       const stopSeconds = Date.now() / 1000;
       await sleep(SCREENCAST_DRAIN_MS);
       await stopScreencast();
@@ -262,7 +280,11 @@ async function startScreencastCapture(
       const kept = frames.filter((f) => f.timestamp <= stopSeconds);
       if (kept.length === 0) {
         // A static screen emits nothing; still produce an honest still video.
-        const shot = await client.call("Page.captureScreenshot", { format: "jpeg", quality });
+        const shot = await boundedCall(
+          client.call("Page.captureScreenshot", { format: "jpeg", quality }),
+          signal,
+          "still frame",
+        );
         const file = path.join(dir, "frame-still.jpg");
         await fs.writeFile(file, Buffer.from(String(shot.data), "base64"));
         kept.push({ file, timestamp: startSeconds });
@@ -595,7 +617,7 @@ export async function startRecording(
         `.${path.basename(output, ext)}.partial-${process.pid}${ext}`,
       );
       try {
-        const source = await capture.finish();
+        const source = await capture.finish(stopOptions.signal);
         clearInterval(monitor);
         // A poll already running when the take ended still counts (bounded).
         if (inFlightPoll) await abortable(withinCleanupTimeout(inFlightPoll), stopOptions.signal);

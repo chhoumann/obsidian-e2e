@@ -456,6 +456,26 @@ describe("capture record", () => {
     await expect(starting).rejects.toThrow(/recording (setup )?cancelled/);
   });
 
+  test("stop({signal}) aborts a zero-frame still fallback the renderer never answers", async () => {
+    const fake = await fakeClient((method) =>
+      method === "Page.captureScreenshot" ? { id: -1 } : { result: {} },
+    );
+    const before = new Set(await fs.readdir(os.tmpdir()));
+    const recording = await startRecording(fake.client, "/tmp/never.webm", {
+      backend: "screencast",
+    });
+    const controller = new AbortController();
+    const stopping = recording.stop({ signal: controller.signal });
+    setTimeout(() => controller.abort(), 400);
+    const started = Date.now();
+    await expect(stopping).rejects.toThrow(/cancelled/);
+    expect(Date.now() - started).toBeLessThan(3000);
+    const leftovers = (await fs.readdir(os.tmpdir())).filter(
+      (name) => name.startsWith("obsidian-e2e-rec-") && !before.has(name),
+    );
+    expect(leftovers).toEqual([]);
+  }, 10_000);
+
   test("only webm/mp4 outputs are accepted", () => {
     expect(encoderArgs("x.webm", 10)).toContain("libvpx-vp9");
     expect(encoderArgs("x.mp4", 10)).toContain("libx264");
