@@ -430,6 +430,24 @@ describe("capture record", () => {
     ).rejects.toThrow(/x11 backend unavailable: no X11 DISPLAY/);
   });
 
+  test("aborting the signal cancels a screencast setup that never gets an answer", async () => {
+    const fake = await fakeClient((method) =>
+      method === "Page.enable" ? { id: -1 } : { result: {} },
+    );
+    const before = new Set(await fs.readdir(os.tmpdir()));
+    const controller = new AbortController();
+    const starting = startRecording(fake.client, "/tmp/never.webm", {
+      backend: "screencast",
+      signal: controller.signal,
+    });
+    setTimeout(() => controller.abort(), 20);
+    await expect(starting).rejects.toThrow(/setup cancelled/);
+    const leftovers = (await fs.readdir(os.tmpdir())).filter(
+      (name) => name.startsWith("obsidian-e2e-rec-") && !before.has(name),
+    );
+    expect(leftovers).toEqual([]);
+  }, 10_000);
+
   test("only webm/mp4 outputs are accepted", () => {
     expect(encoderArgs("x.webm", 10)).toContain("libvpx-vp9");
     expect(encoderArgs("x.mp4", 10)).toContain("libx264");

@@ -189,6 +189,17 @@ async function sleep(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/** Reject as soon as `signal` aborts (the step itself is left to settle). */
+function abortable<T>(step: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return step;
+  if (signal.aborted) return Promise.reject(new Error("recording setup cancelled"));
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(new Error("recording setup cancelled"));
+    signal.addEventListener("abort", onAbort, { once: true });
+    step.then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort));
+  });
+}
+
 /** Cleanup must not hang on a renderer that stopped answering CDP. */
 const CLEANUP_TIMEOUT_MS = 3000;
 async function withinCleanupTimeout(step: Promise<unknown>): Promise<void> {
@@ -207,6 +218,7 @@ async function startScreencastCapture(
   dir: string,
   quality: number,
   fps: number,
+  signal?: AbortSignal,
 ): Promise<Capture> {
   const frames: Frame[] = [];
   const writes: Promise<void>[] = [];
@@ -230,9 +242,12 @@ async function startScreencastCapture(
   };
   let startSeconds: number;
   try {
-    await client.call("Page.enable");
+    await abortable(client.call("Page.enable"), signal);
     startSeconds = Date.now() / 1000;
-    await client.call("Page.startScreencast", { format: "jpeg", quality, everyNthFrame: 1 });
+    await abortable(
+      client.call("Page.startScreencast", { format: "jpeg", quality, everyNthFrame: 1 }),
+      signal,
+    );
   } catch (error) {
     await stopScreencast();
     throw error;
@@ -506,8 +521,8 @@ export async function startRecording(
   let capture: Capture;
   try {
     if (options.cursor) {
-      await injectCss(client, CURSOR_STYLE_ID, CURSOR_CSS);
-      await evaluate(client, CURSOR_SCRIPT);
+      await abortable(injectCss(client, CURSOR_STYLE_ID, CURSOR_CSS), options.signal);
+      await abortable(evaluate(client, CURSOR_SCRIPT), options.signal);
     }
     capture = await (async () => {
       if (x11) {
@@ -519,7 +534,7 @@ export async function startRecording(
           backendNote = `x11 failed to start (${(error as Error).message}); used screencast`;
         }
       }
-      return startScreencastCapture(client, dir, options.quality ?? 90, fps);
+      return startScreencastCapture(client, dir, options.quality ?? 90, fps, options.signal);
     })();
   } catch (error) {
     await removeCursor();
@@ -532,12 +547,13 @@ export async function startRecording(
   // poll (e.g. mid-reload) is "unknown", not a violation.
   let x11Problem: string | undefined;
   let polling = false;
+  let inFlightPoll: Promise<void> | undefined;
   const monitor =
     x11 && backend === "x11"
       ? setInterval(() => {
           if (polling || x11Problem) return;
           polling = true;
-          void detectX11Target(client)
+          inFlightPoll = detectX11Target(client)
             .then((now) => {
               if (!now) return;
               if ("reason" in now) x11Problem = now.reason;
@@ -574,6 +590,8 @@ export async function startRecording(
       try {
         const source = await capture.finish();
         clearInterval(monitor);
+        // A poll already running when the take ended still counts (bounded).
+        if (inFlightPoll) await withinCleanupTimeout(inFlightPoll);
         if (stopOptions.signal?.aborted) throw new Error("recording cancelled");
         if (x11Problem) {
           throw new Error(
