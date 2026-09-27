@@ -348,6 +348,47 @@ describe("capture connect candidates", () => {
   });
 });
 
+describe("capture connect budget", () => {
+  test("an unresponsive first target does not use up the whole deadline", async () => {
+    const socket = (answers: boolean): CdpSocket => {
+      let listener: (data: string) => void = () => {};
+      return {
+        send: (data) => {
+          if (!answers) return;
+          const message = JSON.parse(data) as { id: number };
+          queueMicrotask(() => listener(JSON.stringify({ id: message.id, ...value(true) })));
+        },
+        close: () => {},
+        onMessage: (l) => {
+          listener = l;
+        },
+      };
+    };
+    const started = Date.now();
+    const client = await connectCapture({
+      timeoutMs: 20_000,
+      deps: {
+        fetchJson: () =>
+          Promise.resolve([
+            {
+              type: "page",
+              url: "app://obsidian.md/index.html",
+              webSocketDebuggerUrl: "ws://mute",
+            },
+            {
+              type: "page",
+              url: "app://obsidian.md/index.html",
+              webSocketDebuggerUrl: "ws://main",
+            },
+          ]),
+        connect: (url) => Promise.resolve(socket(url === "ws://main")),
+      },
+    });
+    expect(client).toBeInstanceOf(CdpClient);
+    expect(Date.now() - started).toBeLessThan(8000);
+  }, 15_000);
+});
+
 describe("capture connect deadline", () => {
   test("a WebSocket handshake that never settles still honours the timeout", async () => {
     const started = Date.now();

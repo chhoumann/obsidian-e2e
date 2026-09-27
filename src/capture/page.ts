@@ -3,6 +3,7 @@ import path from "node:path";
 
 import { CdpClient, type CdpDependencies, type CdpTargetInfo } from "../runner/android/cdp";
 import { DEFAULT_CDP_PORT } from "./launch";
+import { stagePartial } from "./media";
 
 const STYLE_ID = "obsidian-e2e-capture-style";
 const EXPAND_STYLE_ID = "obsidian-e2e-capture-expand";
@@ -34,6 +35,9 @@ function isObsidianPage(target: CdpTargetInfo): boolean {
     (target.url ?? "").startsWith("app://obsidian.md/")
   );
 }
+
+/** Each candidate target gets at most this long per step before the next is tried. */
+const CANDIDATE_BUDGET_MS = 5000;
 
 async function sleep(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms));
@@ -80,15 +84,24 @@ export async function connectCapture(options: ConnectOptions = {}): Promise<CdpC
     step: Promise<T>,
     onLate?: (value: T) => void,
     abort?: AbortController,
+    /** Per-step cap so one unresponsive target cannot use up the whole deadline. */
+    capMs = Number.POSITIVE_INFINITY,
   ): Promise<T> => {
     const remaining = Math.max(0, deadline - Date.now());
+    const budget = Math.min(remaining, capMs);
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<never>((_, reject) => {
       timer = setTimeout(() => {
         abort?.abort();
         void step.then((value) => onLate?.(value)).catch(() => {});
-        reject(new Error(`timed out after ${options.timeoutMs ?? 30_000} ms`));
-      }, remaining);
+        reject(
+          new Error(
+            budget < remaining
+              ? `target did not answer within ${budget} ms`
+              : `timed out after ${options.timeoutMs ?? 30_000} ms`,
+          ),
+        );
+      }, budget);
     });
     return Promise.race([step, timeout]).finally(() => clearTimeout(timer));
   };
@@ -118,8 +131,18 @@ export async function connectCapture(options: ConnectOptions = {}): Promise<CdpC
             }),
             (late) => late.close(),
             handshake,
+            CANDIDATE_BUDGET_MS,
           );
-          if (await bounded(evaluate<boolean>(client, readyExpression))) return client;
+          if (
+            await bounded(
+              evaluate<boolean>(client, readyExpression),
+              undefined,
+              undefined,
+              CANDIDATE_BUDGET_MS,
+            )
+          ) {
+            return client;
+          }
           lastError = wanted === undefined ? "main workspace not ready" : "window still loading";
         } catch (error) {
           lastError = error instanceof Error ? error.message : String(error);
@@ -444,8 +467,15 @@ export async function captureScreenshot(
           `(clip ${clip.width}x${clip.height} CSS px at DPR ${dpr})`,
       );
     }
-    await fs.mkdir(path.dirname(path.resolve(output)), { recursive: true });
-    await fs.writeFile(output, bytes);
+    // Staged like every other output: a pre-planted symlink at `output` is
+    // replaced by the rename, never written through.
+    const { partial, discard } = await stagePartial(output);
+    try {
+      await fs.writeFile(partial, bytes);
+      await fs.rename(partial, output);
+    } finally {
+      await discard();
+    }
     return {
       path: path.resolve(output),
       ...size,
