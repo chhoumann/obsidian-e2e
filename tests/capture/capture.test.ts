@@ -138,6 +138,7 @@ describe("capture launch", () => {
     expect(command.args).toContain("--force-device-scale-factor=2");
     expect(command.args).toContain(`--user-data-dir=${profile.home}/.config/obsidian`);
     expect(command.env.HOME).toBe(profile.home);
+    expect(command.env.OBSIDIAN_E2E_CAPTURE_XVFB).toBe("1");
   });
 
   test("an existing DISPLAY or macOS runs the app directly", () => {

@@ -273,6 +273,8 @@ async function startScreencastCapture(
 
 export interface X11Target {
   display: string;
+  /** True on a private `capture launch` Xvfb display (nothing else can cover the window). */
+  dedicated: boolean;
   xauthority?: string;
   /** Window content region in physical screen pixels. */
   region: { x: number; y: number; width: number; height: number };
@@ -306,6 +308,7 @@ export async function detectX11Target(client: CdpClient): Promise<X11Target | { 
       const px = (v) => Math.round(v * s);
       const even = (v) => px(v) - (px(v) % 2);
       return { display: process.env.DISPLAY, xauthority: process.env.XAUTHORITY,
+        dedicated: process.env.OBSIDIAN_E2E_CAPTURE_XVFB === "1",
         region: { x: px(b.x), y: px(b.y), width: even(b.width), height: even(b.height) } };
     })()`,
   );
@@ -475,6 +478,11 @@ export async function startRecording(
       const reason = detected?.reason ?? "renderer did not report a window";
       if (requested === "x11") throw new Error(`x11 backend unavailable: ${reason}`);
       backendNote = `x11 unavailable (${reason}); used screencast`;
+    } else if (requested === "auto" && !detected.dedicated) {
+      // On a shared X display another application's window could cover the
+      // region, which Electron cannot see; only an explicit x11 opts into that.
+      backendNote =
+        "x11 only auto-selected on a `capture launch` Xvfb display; used screencast (pass --backend x11 to force)";
     } else {
       backend = "x11";
       x11 = detected;

@@ -11,6 +11,8 @@ import { ensureSecureDir } from "../runner/security";
 export const DEFAULT_CDP_PORT = 9333;
 export const DEFAULT_CAPTURE_SCALE = 2;
 export const DEFAULT_XVFB_SCREEN = "3840x3200x24";
+/** Set in the app's environment when it runs on a private Xvfb display. */
+export const DEDICATED_DISPLAY_ENV = "OBSIDIAN_E2E_CAPTURE_XVFB";
 
 /**
  * A dedicated, disposable capture instance: its own HOME/profile, a CDP port,
@@ -145,7 +147,9 @@ export function captureLaunchCommand(
   return {
     file: "xvfb-run",
     args: ["-a", "-s", `-screen 0 ${options.screen ?? DEFAULT_XVFB_SCREEN}`, app, ...appArgs],
-    env: childEnv,
+    // Marks a private display nothing else draws on: `record --backend auto`
+    // only picks x11grab there (see detectX11Target).
+    env: { ...childEnv, [DEDICATED_DISPLAY_ENV]: "1" },
   };
 }
 

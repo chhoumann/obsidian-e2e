@@ -279,8 +279,11 @@ Recording backends (`--backend`, default `auto`):
 - `x11`: ffmpeg `x11grab` of the window's region on the X display
   (Linux/Xvfb). Constant-rate, independent of CDP traffic, and the `--cursor`
   overlay is page content so it is captured (the real X pointer is hidden,
-  since CDP input never moves it). The window must be fully on the X screen
-  and not overlapped by another Obsidian window, otherwise `auto` falls back.
+  since CDP input never moves it). `auto` only picks it on the private Xvfb
+  display started by `capture launch`; elsewhere pass `--backend x11`
+  explicitly and keep other windows off the region. The window must stay
+  on-screen, unobscured by other Obsidian windows, and fixed in size and
+  position for the whole take, or the take is rejected.
 - `screencast`: CDP `Page.startScreencast`. Works anywhere (macOS, no X) and
   captures page pixels only, but tops out around 15-20 distinct fps at
   2560x1600 and adds renderer load.
