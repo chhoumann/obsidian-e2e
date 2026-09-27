@@ -306,10 +306,27 @@ describe("capture record", () => {
       "ffconcat version 1.0\nfile '/t/a.jpg'\nduration 0.5000\nfile '/t/b.jpg'\nduration 1.5000\nfile '/t/b.jpg'\n",
     );
     expect(() => buildConcatList([], 0, 1)).toThrow(/no frames/);
+    // A frame stamped before start does not stretch the timeline.
+    const early = buildConcatList(
+      [
+        { file: "/t/a.jpg", timestamp: 9.9 },
+        { file: "/t/b.jpg", timestamp: 10.5 },
+      ],
+      10,
+      11,
+    );
+    expect(early).toContain("duration 0.5000\nfile '/t/b.jpg'\nduration 0.5000");
     // An instant take still holds its only frame for one output frame.
     expect(buildConcatList([{ file: "/t/a.jpg", timestamp: 5 }], 5, 5.01, 0.1)).toContain(
       "duration 0.1000",
     );
+  });
+
+  test("an explicit x11 backend refuses to fall back when x11 is unusable", async () => {
+    const fake = await fakeClient(() => value({ reason: "no X11 DISPLAY" }));
+    await expect(
+      startRecording(fake.client, "/nonexistent/x.webm", { backend: "x11" }),
+    ).rejects.toThrow(/x11 backend unavailable: no X11 DISPLAY/);
   });
 
   test("only webm/mp4 outputs are accepted", () => {
@@ -324,7 +341,7 @@ describe("capture record", () => {
     const output = path.join(dir, "take.webm");
     await fs.writeFile(output, "previous good take");
     const before = new Set(await fs.readdir(os.tmpdir()));
-    const recording = await startRecording(fake.client, output);
+    const recording = await startRecording(fake.client, output, { backend: "screencast" });
     fake.emit("Page.screencastFrame", {
       sessionId: 1,
       data: Buffer.from("jpeg").toString("base64"),

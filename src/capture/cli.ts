@@ -18,7 +18,7 @@ import {
   typeText,
   type ScreenshotTarget,
 } from "./page";
-import { startRecording } from "./record";
+import { startRecording, type RecordBackend } from "./record";
 
 interface Spec {
   values?: string[];
@@ -92,7 +92,7 @@ const SPECS: Record<string, Spec> = {
   },
   type: { values: [...CONNECT.values, "selector"], numbers: [...CONNECT.numbers, "delay", "wait"] },
   record: {
-    values: CONNECT.values,
+    values: [...CONNECT.values, "backend"],
     numbers: [...CONNECT.numbers, "fps", "quality", "max-seconds"],
     booleans: ["cursor", "keep-failed-frames"],
   },
@@ -121,8 +121,10 @@ obsidian CLI, or 'capture type'.
   type <text> [--selector <css>] [--delay 70] [--wait 5000]
       In-page paced typing (keeps recordings real-time). Waits up to --wait ms
       for the selector / an editable element to have focus.
-  record <out.webm|out.mp4> [--fps 10] [--cursor] [--max-seconds 300] -- <command...>
+  record <out.webm|out.mp4> [--fps 10] [--cursor] [--backend auto|x11|screencast]
+         [--max-seconds 300] -- <command...>
       Record while <command> runs (env OBSIDIAN_E2E_CDP_PORT is set for it).
+      auto = x11grab of the window when on X11 (smoothest), else CDP screencast.
       Non-zero exit/timeout/signal => no output file, same exit status.
   gif <in> <out.gif> [--width 1280] [--fps 8] [--colors 128] [--lossy 40]
   sheet <in> <out.png> [--every 1] [--columns 4] [--tile-width 480]
@@ -303,6 +305,13 @@ export async function runCaptureCli(
   return 1;
 }
 
+function parseBackend(value: string | undefined): RecordBackend | undefined {
+  if (value === undefined || value === "auto" || value === "x11" || value === "screencast") {
+    return value;
+  }
+  throw new Error("--backend must be auto, x11 or screencast");
+}
+
 /**
  * Record while a child command drives the UI. The recording is discarded on
  * any failure path - non-zero exit, spawn error, timeout, or SIGINT/SIGTERM -
@@ -347,6 +356,7 @@ async function recordAroundCommand(
       quality: num(flags, "quality"),
       cursor: flags.cursor === true,
       keepFrames: flags["keep-failed-frames"] === true,
+      backend: parseBackend(str(flags, "backend")),
     });
     const [file, ...commandArgs] = args.command;
     // Own process group, so a timeout/signal reaches the driver's children too.

@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -8,14 +9,25 @@ import { evaluate, injectCss } from "./page";
 
 const CURSOR_STYLE_ID = "obsidian-e2e-capture-cursor-style";
 
+/**
+ * - `x11`: ffmpeg x11grab of the window's screen region. Constant-rate and
+ *   independent of CDP traffic; ~29 distinct fps at 30 fps / 2560x1600 in
+ *   Xvfb. Linux/X11 only, and the window must be on-screen and unobscured.
+ * - `screencast`: CDP `Page.startScreencast`. Portable (macOS, no X), captures
+ *   only page pixels, but tops out around 20 distinct fps at 2560x1600.
+ * - `auto` (default): `x11` when usable, otherwise `screencast`.
+ */
+export type RecordBackend = "auto" | "x11" | "screencast";
+
 export interface RecordOptions {
-  /** Output frame rate. 10 is plenty for UI demos; the source is variable-rate. */
+  /** Output frame rate (default 10). With `x11` this is also the capture rate. */
   fps?: number;
-  /** JPEG quality of captured frames (0-100). */
+  backend?: RecordBackend;
+  /** JPEG quality of screencast frames (0-100). */
   quality?: number;
   /** Draw a pointer that follows DOM mouse events (CDP input moves no real cursor). */
   cursor?: boolean;
-  /** Keep the raw frame directory (for debugging); otherwise always deleted. */
+  /** Keep the raw capture directory (for debugging); otherwise always deleted. */
   keepFrames?: boolean;
 }
 
@@ -26,16 +38,36 @@ export interface Recording {
    * `signal`-cancelled encode never replaces an existing file.
    */
   stop(options?: { signal?: AbortSignal }): Promise<RecordingResult>;
-  /** Stop and discard this take's temp frames. Never touches `output`; never throws. */
+  /** Stop and discard this take's temp capture. Never touches `output`; never throws. */
   abort(): Promise<void>;
 }
 
 export interface RecordingResult extends MediaInfo {
   path: string;
-  /** Wall-clock seconds between start and stop; the video duration should match it. */
+  backend: "x11" | "screencast";
+  /** Why `auto` fell back to screencast, when it did. */
+  backendNote?: string;
+  /** Wall-clock seconds between start and stop; the video duration must match it. */
   wallSeconds: number;
-  /** Distinct frames Chromium delivered (it only emits on visual change). */
+  /** Frames captured: distinct page frames (screencast) or grabbed frames (x11). */
   capturedFrames: number;
+  /**
+   * Screencast only: largest gap between delivered frames. Near 1/fps during
+   * continuous motion means smooth capture; large gaps are a static screen
+   * (fine) or starvation (review the contact sheet).
+   */
+  maxFrameGapSeconds?: number;
+  /** x11 only: frames ffmpeg dropped/duplicated to hold the rate (0 = kept up). */
+  droppedFrames?: number;
+  duplicatedFrames?: number;
+}
+
+/** Largest gap between consecutive frame timestamps (and from start/stop). */
+export function maxFrameGap(timestamps: number[], start: number, stop: number): number {
+  const points = [start, ...timestamps, stop];
+  let max = 0;
+  for (let i = 1; i < points.length; i += 1) max = Math.max(max, points[i]! - points[i - 1]!);
+  return Number(max.toFixed(3));
 }
 
 interface Frame {
@@ -57,11 +89,14 @@ export function buildConcatList(
 ): string {
   if (frames.length === 0) throw new Error("no frames to encode");
   const lines = ["ffconcat version 1.0"];
+  // Chrome's frame clock can sit slightly before our start; clamp into
+  // [start, stop] so the durations always sum to the real elapsed time.
+  const at = (t: number) => Math.min(stopSeconds, Math.max(startSeconds, t));
   frames.forEach((frame, index) => {
-    const begin = index === 0 ? Math.min(startSeconds, frame.timestamp) : frame.timestamp;
-    const end = index + 1 < frames.length ? frames[index + 1]!.timestamp : stopSeconds;
-    lines.push(`file '${frame.file.replaceAll("'", "'\\''")}'`);
+    const begin = index === 0 ? startSeconds : at(frame.timestamp);
+    const end = index + 1 < frames.length ? at(frames[index + 1]!.timestamp) : stopSeconds;
     const last = index + 1 === frames.length;
+    lines.push(`file '${frame.file.replaceAll("'", "'\\''")}'`);
     lines.push(`duration ${Math.max(last ? minLastSeconds : 0.001, end - begin).toFixed(4)}`);
   });
   // The concat demuxer ignores the last entry's duration unless it is repeated.
@@ -132,10 +167,259 @@ const CURSOR_CSS =
   "pointer-events:none;z-index:2147483647;opacity:0;transition:width .08s,height .08s,margin .08s}" +
   "#obsidian-e2e-capture-cursor.is-down{width:12px;height:12px;margin:-6px 0 0 -6px;background:rgba(0,0,0,.6)}";
 
+/** What a capture backend hands to the shared encode/verify step. */
+interface CapturedSource {
+  inputArgs: string[];
+  startSeconds: number;
+  stopSeconds: number;
+  stats: Pick<
+    RecordingResult,
+    "capturedFrames" | "maxFrameGapSeconds" | "droppedFrames" | "duplicatedFrames"
+  >;
+}
+
+interface Capture {
+  finish(): Promise<CapturedSource>;
+  abort(): Promise<void>;
+}
+
+async function sleep(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Frames arrive ~50-170 ms after their swap time; wait for those in flight at stop. */
+const SCREENCAST_DRAIN_MS = 250;
+
+async function startScreencastCapture(
+  client: CdpClient,
+  dir: string,
+  quality: number,
+  fps: number,
+): Promise<Capture> {
+  const frames: Frame[] = [];
+  const writes: Promise<void>[] = [];
+  let writeError: Error | undefined;
+  const unsubscribe = client.on("Page.screencastFrame", (params) => {
+    const sessionId = params.sessionId as number;
+    const metadata = params.metadata as { timestamp?: number };
+    const file = path.join(dir, `frame-${String(frames.length).padStart(6, "0")}.jpg`);
+    frames.push({ file, timestamp: metadata.timestamp ?? Date.now() / 1000 });
+    writes.push(
+      fs.writeFile(file, Buffer.from(String(params.data), "base64")).catch((error: Error) => {
+        writeError ??= error;
+      }),
+    );
+    client.call("Page.screencastFrameAck", { sessionId }).catch(() => {});
+  });
+  const stopScreencast = async () => {
+    await client.call("Page.stopScreencast").catch(() => {});
+    unsubscribe();
+    await Promise.all(writes);
+  };
+  let startSeconds: number;
+  try {
+    await client.call("Page.enable");
+    startSeconds = Date.now() / 1000;
+    await client.call("Page.startScreencast", { format: "jpeg", quality, everyNthFrame: 1 });
+  } catch (error) {
+    await stopScreencast();
+    throw error;
+  }
+  return {
+    abort: stopScreencast,
+    async finish() {
+      const stopSeconds = Date.now() / 1000;
+      await sleep(SCREENCAST_DRAIN_MS);
+      await stopScreencast();
+      if (writeError) throw writeError;
+      const kept = frames.filter((f) => f.timestamp <= stopSeconds);
+      if (kept.length === 0) {
+        // A static screen emits nothing; still produce an honest still video.
+        const shot = await client.call("Page.captureScreenshot", { format: "jpeg", quality });
+        const file = path.join(dir, "frame-still.jpg");
+        await fs.writeFile(file, Buffer.from(String(shot.data), "base64"));
+        kept.push({ file, timestamp: startSeconds });
+      }
+      const list = path.join(dir, "frames.ffconcat");
+      await fs.writeFile(list, buildConcatList(kept, startSeconds, stopSeconds, 1 / fps));
+      return {
+        inputArgs: ["-f", "concat", "-safe", "0", "-i", list],
+        startSeconds,
+        stopSeconds,
+        stats: {
+          capturedFrames: kept.length,
+          maxFrameGapSeconds: maxFrameGap(
+            kept.map((f) => f.timestamp),
+            startSeconds,
+            stopSeconds,
+          ),
+        },
+      };
+    },
+  };
+}
+
+export interface X11Target {
+  display: string;
+  xauthority?: string;
+  /** Window content region in physical screen pixels. */
+  region: { x: number; y: number; width: number; height: number };
+}
+
 /**
- * Start a CDP screencast recording of the Obsidian window. Frames are written
- * as they arrive and encoded only at `stop()` with their real timestamps, so a
- * busy page can never make the encoder "fall behind" or compress time.
+ * Locate the window's content on the X display from inside the renderer, or
+ * explain why x11grab cannot capture it faithfully.
+ */
+export async function detectX11Target(client: CdpClient): Promise<X11Target | { reason: string }> {
+  return evaluate<X11Target | { reason: string }>(
+    client,
+    `(() => {
+      if (typeof process === "undefined" || process.platform !== "linux") return { reason: "not a Linux renderer" };
+      if (!process.env.DISPLAY || process.env.WAYLAND_DISPLAY) return { reason: "no X11 DISPLAY" };
+      const { remote } = require("electron");
+      const win = remote.getCurrentWindow();
+      if (win.isMinimized() || !win.isVisible()) return { reason: "window is not visible" };
+      const b = win.getContentBounds();
+      const display = remote.screen.getDisplayMatching(b);
+      const s = display.scaleFactor;
+      const sb = display.bounds;
+      if (b.x < sb.x || b.y < sb.y || b.x + b.width > sb.x + sb.width || b.y + b.height > sb.y + sb.height)
+        return { reason: "window extends beyond the X screen (use a larger capture launch --screen)" };
+      const overlap = remote.BrowserWindow.getAllWindows().some((o) => {
+        if (o.id === win.id || !o.isVisible() || o.isMinimized()) return false;
+        const r = o.getBounds();
+        return r.x < b.x + b.width && b.x < r.x + r.width && r.y < b.y + b.height && b.y < r.y + r.height;
+      });
+      if (overlap) return { reason: "another Obsidian window overlaps the main window" };
+      const px = (v) => Math.round(v * s);
+      const even = (v) => px(v) - (px(v) % 2);
+      return { display: process.env.DISPLAY, xauthority: process.env.XAUTHORITY,
+        region: { x: px(b.x), y: px(b.y), width: even(b.width), height: even(b.height) } };
+    })()`,
+  );
+}
+
+async function startX11Capture(target: X11Target, dir: string, fps: number): Promise<Capture> {
+  const file = path.join(dir, "x11.mkv");
+  const { x, y, width, height } = target.region;
+  const child = spawn(
+    "ffmpeg",
+    [
+      "-v",
+      "error",
+      "-y",
+      "-stats_period",
+      "0.1",
+      "-progress",
+      "pipe:1",
+      "-f",
+      "x11grab",
+      "-draw_mouse",
+      "0",
+      "-framerate",
+      String(fps),
+      "-video_size",
+      `${width}x${height}`,
+      "-i",
+      `${target.display}+${x},${y}`,
+      "-c:v",
+      "libx264",
+      "-preset",
+      "ultrafast",
+      // Two encoder threads: measured on a 2 vCPU host, unlimited threads cut
+      // a heavy scene's own frame rate 13 -> 8 fps; one thread could not
+      // sustain 30 fps; two kept ~29 distinct fps in light scenes and ~10 fps
+      // (of 13) in the heavy one.
+      "-threads",
+      "2",
+      "-crf",
+      "12",
+      file,
+    ],
+    {
+      stdio: ["pipe", "pipe", "pipe"],
+      env: {
+        ...process.env,
+        DISPLAY: target.display,
+        ...(target.xauthority ? { XAUTHORITY: target.xauthority } : {}),
+      },
+    },
+  );
+  let stderr = "";
+  const progress: Record<string, string> = {};
+  let firstFrameAt: number | undefined;
+  let onFirstFrame: () => void = () => {};
+  const firstFrame = new Promise<void>((resolve) => {
+    onFirstFrame = resolve;
+  });
+  child.stderr.on("data", (chunk: Buffer) => {
+    stderr = (stderr + chunk.toString()).slice(-4000);
+  });
+  child.stdout.on("data", (chunk: Buffer) => {
+    for (const line of chunk.toString().split("\n")) {
+      const eq = line.indexOf("=");
+      if (eq > 0) progress[line.slice(0, eq)] = line.slice(eq + 1).trim();
+    }
+    if (firstFrameAt === undefined && Number(progress.frame) >= 1) {
+      // Progress lags the first grab by up to one stats period; back-date it.
+      firstFrameAt = Date.now() / 1000 - Math.min(0.1, Number(progress.frame) / fps);
+      onFirstFrame();
+    }
+  });
+  const exited = new Promise<number | null>((resolve) => {
+    child.on("close", (code) => resolve(code));
+    child.on("error", (error) => {
+      stderr += error.message;
+      resolve(-1);
+    });
+  });
+  const failed = exited.then((code) => {
+    throw new Error(`x11grab exited ${code} before capturing: ${stderr.trim() || "no output"}`);
+  });
+  try {
+    await Promise.race([
+      firstFrame,
+      failed,
+      sleep(10_000).then(() => {
+        throw new Error("x11grab produced no frame within 10 s");
+      }),
+    ]);
+  } catch (error) {
+    child.kill("SIGKILL");
+    throw error;
+  }
+  failed.catch(() => {});
+  return {
+    async abort() {
+      child.kill("SIGKILL");
+      await exited;
+    },
+    async finish() {
+      const stopSeconds = Date.now() / 1000;
+      child.stdin.end("q");
+      const timer = setTimeout(() => child.kill("SIGKILL"), 10_000);
+      const code = await exited;
+      clearTimeout(timer);
+      if (code !== 0) throw new Error(`x11grab failed (${code}): ${stderr.trim()}`);
+      return {
+        inputArgs: ["-i", file],
+        startSeconds: firstFrameAt!,
+        stopSeconds,
+        stats: {
+          capturedFrames: Number(progress.frame ?? 0),
+          droppedFrames: Number(progress.drop_frames ?? 0),
+          duplicatedFrames: Number(progress.dup_frames ?? 0),
+        },
+      };
+    },
+  };
+}
+
+/**
+ * Start recording the Obsidian window (see {@link RecordBackend}). Capture and
+ * final encoding are separate: nothing encodes to the output format while the
+ * take runs, so busy pages or chatty drivers cannot make it fall behind or
+ * compress time; `stop()` verifies the video length against wall-clock time.
  * Always pair with `abort()` on failure paths (see {@link withRecording}).
  */
 export async function startRecording(
@@ -145,56 +429,47 @@ export async function startRecording(
 ): Promise<Recording> {
   const fps = options.fps ?? 10;
   encoderArgs(output, fps); // validate the extension before touching anything
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "obsidian-e2e-rec-"));
-  const frames: Frame[] = [];
-  const writes: Promise<void>[] = [];
-  let sessionError: Error | undefined;
-
-  const unsubscribe = client.on("Page.screencastFrame", (params) => {
-    const sessionId = params.sessionId as number;
-    const metadata = params.metadata as { timestamp?: number };
-    const file = path.join(dir, `frame-${String(frames.length).padStart(6, "0")}.jpg`);
-    frames.push({ file, timestamp: metadata.timestamp ?? Date.now() / 1000 });
-    writes.push(
-      fs.writeFile(file, Buffer.from(String(params.data), "base64")).catch((error: Error) => {
-        sessionError ??= error;
-      }),
-    );
-    client.call("Page.screencastFrameAck", { sessionId }).catch(() => {});
-  });
-
-  const cleanupPage = async () => {
-    await client.call("Page.stopScreencast").catch(() => {});
-    unsubscribe();
-    if (options.cursor) {
-      await evaluate(
-        client,
-        "window.__obsidianE2ECursor?.(); document.getElementById('" +
-          CURSOR_STYLE_ID +
-          "')?.remove(); true",
-      ).catch(() => {});
+  const requested = options.backend ?? "auto";
+  let backend: "x11" | "screencast" = "screencast";
+  let backendNote: string | undefined;
+  let x11: X11Target | undefined;
+  if (requested !== "screencast") {
+    const detected = await detectX11Target(client).catch((error: Error) => ({
+      reason: error.message,
+    }));
+    if (!detected || "reason" in detected) {
+      const reason = detected?.reason ?? "renderer did not report a window";
+      if (requested === "x11") throw new Error(`x11 backend unavailable: ${reason}`);
+      backendNote = `x11 unavailable (${reason}); used screencast`;
+    } else {
+      backend = "x11";
+      x11 = detected;
     }
-    await Promise.all(writes);
+  }
+
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "obsidian-e2e-rec-"));
+  const removeCursor = async () => {
+    if (!options.cursor) return;
+    await evaluate(
+      client,
+      `window.__obsidianE2ECursor?.(); document.getElementById(${JSON.stringify(CURSOR_STYLE_ID)})?.remove(); true`,
+    ).catch(() => {});
   };
   const removeDir = async () => {
     if (!options.keepFrames) await fs.rm(dir, { recursive: true, force: true });
   };
 
-  let startSeconds: number;
+  let capture: Capture;
   try {
     if (options.cursor) {
       await injectCss(client, CURSOR_STYLE_ID, CURSOR_CSS);
       await evaluate(client, CURSOR_SCRIPT);
     }
-    await client.call("Page.enable");
-    startSeconds = Date.now() / 1000;
-    await client.call("Page.startScreencast", {
-      format: "jpeg",
-      quality: options.quality ?? 90,
-      everyNthFrame: 1,
-    });
+    capture = x11
+      ? await startX11Capture(x11, dir, fps)
+      : await startScreencastCapture(client, dir, options.quality ?? 90, fps);
   } catch (error) {
-    await cleanupPage();
+    await removeCursor();
     await removeDir();
     throw error;
   }
@@ -204,53 +479,29 @@ export async function startRecording(
     async abort() {
       if (finished) return;
       finished = true;
-      await cleanupPage().catch(() => {});
+      await capture.abort().catch(() => {});
+      await removeCursor();
       await removeDir().catch(() => {});
     },
     async stop(stopOptions = {}) {
       if (finished) throw new Error("recording already stopped");
       finished = true;
-      const stopSeconds = Date.now() / 1000;
       const ext = path.extname(output);
       const partial = path.join(
         path.dirname(path.resolve(output)),
         `.${path.basename(output, ext)}.partial-${process.pid}${ext}`,
       );
       try {
-        await cleanupPage();
-        if (sessionError) throw sessionError;
-        if (frames.length === 0) {
-          // A static screen emits nothing; still produce an honest still video.
-          const shot = await client.call("Page.captureScreenshot", {
-            format: "jpeg",
-            quality: options.quality ?? 90,
-          });
-          const file = path.join(dir, "frame-still.jpg");
-          await fs.writeFile(file, Buffer.from(String(shot.data), "base64"));
-          frames.push({ file, timestamp: startSeconds });
-        }
-        const list = path.join(dir, "frames.ffconcat");
-        await fs.writeFile(list, buildConcatList(frames, startSeconds, stopSeconds, 1 / fps));
+        const source = await capture.finish();
+        await removeCursor();
         await fs.mkdir(path.dirname(path.resolve(output)), { recursive: true });
         await runTool(
           "ffmpeg",
-          [
-            "-v",
-            "error",
-            "-y",
-            "-f",
-            "concat",
-            "-safe",
-            "0",
-            "-i",
-            list,
-            ...encoderArgs(output, fps),
-            partial,
-          ],
+          ["-v", "error", "-y", ...source.inputArgs, ...encoderArgs(output, fps), partial],
           stopOptions.signal,
         );
         const info = await probeMedia(partial);
-        const wallSeconds = stopSeconds - startSeconds;
+        const wallSeconds = source.stopSeconds - source.startSeconds;
         if (
           info.durationSeconds === undefined ||
           Math.abs(info.durationSeconds - wallSeconds) > Math.max(0.5, 2 / fps)
@@ -261,8 +512,17 @@ export async function startRecording(
         }
         if (stopOptions.signal?.aborted) throw new Error("recording cancelled");
         await fs.rename(partial, output);
-        return { ...info, path: path.resolve(output), wallSeconds, capturedFrames: frames.length };
+        return {
+          ...info,
+          path: path.resolve(output),
+          backend,
+          ...(backendNote ? { backendNote } : {}),
+          wallSeconds,
+          ...source.stats,
+        };
       } catch (error) {
+        await capture.abort().catch(() => {});
+        await removeCursor();
         await fs.rm(partial, { force: true }).catch(() => {});
         throw error;
       } finally {

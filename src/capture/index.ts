@@ -35,8 +35,8 @@ export type {
   ScreenshotTarget,
   TypeOptions,
 } from "./page";
-export { buildConcatList, startRecording, withRecording } from "./record";
-export type { RecordOptions, Recording, RecordingResult } from "./record";
+export { buildConcatList, detectX11Target, startRecording, withRecording } from "./record";
+export type { RecordBackend, RecordOptions, Recording, RecordingResult, X11Target } from "./record";
 export { contactSheet, probeMedia, videoToGif } from "./media";
 export type { ContactSheetOptions, GifOptions, MediaInfo } from "./media";
 export { runCaptureCli } from "./cli";

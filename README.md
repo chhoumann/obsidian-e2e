@@ -265,14 +265,36 @@ not a scenario framework: drive the UI between calls with anything
 CDP), and every capture command prints a JSON result whose sizes/durations were
 checked after writing.
 
-| Command                              | What it does                                                                                                                                                                                                                                                                                                             |
-| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `launch --vault <dir>`               | Foreground capture instance: own HOME/profile, `--remote-debugging-port` (default 9333), real `--force-device-scale-factor` (default 2), `xvfb-run` on Linux without `$DISPLAY`. Separate from the runner's test instance. `--print-env` prints its exports.                                                             |
-| `prepare`                            | Waits until the window is capturable (reconnecting through reloads), sets the content size, theme, font and capture CSS, then verifies viewport, DPR, theme and that the font is really installed.                                                                                                                       |
-| `screenshot <out.png>`               | Viewport, `--selector`, top-most `--modal`, or any `--rect-js` expression; `--pad`, `--expand` (lift modal max-height), `--clean` (blur, drop suggestion popovers, no spellcheck squiggles). Cropped by Chromium at the real DPR; fails if the target is off-screen or the PNG is the wrong size.                        |
-| `type <text>`                        | Paced typing scheduled inside the page (one CDP call), so recordings stay real-time. Waits for the selector/focus.                                                                                                                                                                                                       |
-| `record <out.webm\|mp4> -- <cmd...>` | Screencast while `<cmd>` drives the UI. Frames are encoded with their real timestamps, so the video length matches wall-clock time. Non-zero exit, timeout (`--max-seconds`) or a signal discards the take and returns the same status; temp frames are always removed. `--cursor` draws a pointer for CDP mouse events. |
-| `gif`, `sheet`, `probe`              | Palette GIF (+ `gifsicle -O3 --lossy` when installed), a contact sheet for reviewing a take, and an ffprobe summary.                                                                                                                                                                                                     |
+| Command                              | What it does                                                                                                                                                                                                                                                                                                                                                                          |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `launch --vault <dir>`               | Foreground capture instance: own HOME/profile, `--remote-debugging-port` (default 9333), real `--force-device-scale-factor` (default 2), `xvfb-run` on Linux without `$DISPLAY`. Separate from the runner's test instance. `--print-env` prints its exports.                                                                                                                          |
+| `prepare`                            | Waits until the window is capturable (reconnecting through reloads), sets the content size, theme, font and capture CSS, then verifies viewport, DPR, theme and that the font is really installed.                                                                                                                                                                                    |
+| `screenshot <out.png>`               | Viewport, `--selector`, top-most `--modal`, or any `--rect-js` expression; `--pad`, `--expand` (lift modal max-height), `--clean` (blur, drop suggestion popovers, no spellcheck squiggles). Cropped by Chromium at the real DPR; fails if the target is off-screen or the PNG is the wrong size.                                                                                     |
+| `type <text>`                        | Paced typing scheduled inside the page (one CDP call), so recordings stay real-time. Waits for the selector/focus.                                                                                                                                                                                                                                                                    |
+| `record <out.webm\|mp4> -- <cmd...>` | Records while `<cmd>` drives the UI. Capture and final encoding are separate, and the video length is checked against wall-clock time. Non-zero exit, timeout (`--max-seconds`) or a signal discards the take and returns the same status; temp files are always removed and an existing output is only replaced by a verified take. `--cursor` draws a pointer for CDP mouse events. |
+| `gif`, `sheet`, `probe`              | Palette GIF (+ `gifsicle -O3 --lossy` when installed), a contact sheet for reviewing a take, and an ffprobe summary.                                                                                                                                                                                                                                                                  |
+
+Recording backends (`--backend`, default `auto`):
+
+- `x11`: ffmpeg `x11grab` of the window's region on the X display
+  (Linux/Xvfb). Constant-rate, independent of CDP traffic, and the `--cursor`
+  overlay is page content so it is captured (the real X pointer is hidden,
+  since CDP input never moves it). The window must be fully on the X screen
+  and not overlapped by another Obsidian window, otherwise `auto` falls back.
+- `screencast`: CDP `Page.startScreencast`. Works anywhere (macOS, no X) and
+  captures page pixels only, but tops out around 15-20 distinct fps at
+  2560x1600 and adds renderer load.
+
+Measured in a 2 vCPU orb at 2560x1600 (frame content decoded from a
+timestamp barcode burned into the page): `x11` at `--fps 30` kept 27-31
+distinct fps during palette typing, per-key `agent-browser` input, clicks and
+100 concurrent `agent-browser eval` calls, with video length within 0.1 s of
+page time; `screencast` managed 15-17. Heavy scenes are bounded by the app:
+a graph view plus continuous scrolling rendered at 13 fps with no recorder,
+~10 fps while recording with `x11 --fps 30`, and 12 fps with `x11 --fps 10`.
+Use `--fps 10` (the default) for GIFs and heavy scenes and `--fps 30` for
+smooth light UI. Drive typing with `capture type` (one in-page call per
+string) rather than one CDP call per key.
 
 Other page windows (e.g. Settings, which may open as a popout in Obsidian 1.13+)
 are addressed with `--window <title substring>`.

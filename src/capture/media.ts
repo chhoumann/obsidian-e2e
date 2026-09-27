@@ -2,9 +2,6 @@ import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { promisify } from "node:util";
-
-const execFileAsync = promisify(execFile);
 
 /** Run an external tool, turning ENOENT into an install hint. */
 export async function runTool(
@@ -12,22 +9,35 @@ export async function runTool(
   args: readonly string[],
   signal?: AbortSignal,
 ): Promise<string> {
-  try {
-    const { stdout } = await execFileAsync(file, [...args], {
-      maxBuffer: 16 * 1024 * 1024,
-      signal,
-    });
-    return stdout;
-  } catch (error) {
-    const err = error as NodeJS.ErrnoException & { stderr?: string };
-    if (signal?.aborted) throw new Error(`${file} cancelled`);
-    if (err.code === "ENOENT") {
-      throw new Error(
-        `${file} is not installed (Debian/Ubuntu: apt-get install ${file === "ffprobe" ? "ffmpeg" : file})`,
-      );
-    }
-    throw new Error(`${file} failed: ${(err.stderr ?? err.message).trim()}`);
-  }
+  if (signal?.aborted) throw new Error(`${file} cancelled`);
+  // Not execFile's own `signal`: that rejects immediately while ffmpeg keeps
+  // running (and finalizing its output) for seconds. SIGKILL it instead and
+  // settle only once it has exited, so callers can safely delete partials.
+  return new Promise((resolve, reject) => {
+    const child = execFile(
+      file,
+      [...args],
+      { maxBuffer: 16 * 1024 * 1024 },
+      (error, stdout, stderr) => {
+        signal?.removeEventListener("abort", onAbort);
+        if (!error) {
+          resolve(stdout);
+          return;
+        }
+        const err = error as NodeJS.ErrnoException;
+        if (signal?.aborted) reject(new Error(`${file} cancelled`));
+        else if (err.code === "ENOENT") {
+          reject(
+            new Error(
+              `${file} is not installed (Debian/Ubuntu: apt-get install ${file === "ffprobe" ? "ffmpeg" : file})`,
+            ),
+          );
+        } else reject(new Error(`${file} failed: ${(stderr || err.message).trim()}`));
+      },
+    );
+    const onAbort = () => child.kill("SIGKILL");
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
 }
 
 /** Write via a sibling partial file, verify it, then rename over `output`. */
