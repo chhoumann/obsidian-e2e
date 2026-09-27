@@ -19,6 +19,7 @@ export default defineConfig({
       "src/matchers.ts",
       "src/runner/index.ts",
       "src/runner/bin.ts",
+      "src/capture/index.ts",
     ],
     exports: false,
     fixedExtension: true,
