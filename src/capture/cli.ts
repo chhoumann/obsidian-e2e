@@ -69,7 +69,7 @@ export function parseCaptureArgs(argv: readonly string[], spec: Spec): CaptureAr
   return { flags, positionals, command: [] };
 }
 
-/** Grace between SIGTERM and SIGKILL for a timed-out record command. */
+/** Grace before SIGKILL when a timed-out or cancelled record command ignores its signal. */
 const KILL_GRACE_MS = 3000;
 
 const CONNECT = { numbers: ["port", "timeout"], values: ["window"] };
@@ -352,6 +352,7 @@ async function recordAroundCommand(
     const onSignal = (signal: NodeJS.Signals) => () => {
       received ??= signal;
       killTree(signal);
+      setTimeout(() => killTree("SIGKILL"), KILL_GRACE_MS).unref();
     };
     const onInt = onSignal("SIGINT");
     const onTerm = onSignal("SIGTERM");
