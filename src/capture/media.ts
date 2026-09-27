@@ -7,12 +7,20 @@ import { promisify } from "node:util";
 const execFileAsync = promisify(execFile);
 
 /** Run an external tool, turning ENOENT into an install hint. */
-export async function runTool(file: string, args: readonly string[]): Promise<string> {
+export async function runTool(
+  file: string,
+  args: readonly string[],
+  signal?: AbortSignal,
+): Promise<string> {
   try {
-    const { stdout } = await execFileAsync(file, [...args], { maxBuffer: 16 * 1024 * 1024 });
+    const { stdout } = await execFileAsync(file, [...args], {
+      maxBuffer: 16 * 1024 * 1024,
+      signal,
+    });
     return stdout;
   } catch (error) {
     const err = error as NodeJS.ErrnoException & { stderr?: string };
+    if (signal?.aborted) throw new Error(`${file} cancelled`);
     if (err.code === "ENOENT") {
       throw new Error(
         `${file} is not installed (Debian/Ubuntu: apt-get install ${file === "ffprobe" ? "ffmpeg" : file})`,

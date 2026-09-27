@@ -324,6 +324,23 @@ async function recordAroundCommand(
     window: str(flags, "window"),
   });
   let recording: Awaited<ReturnType<typeof startRecording>> | undefined;
+  let killTree: (signal: NodeJS.Signals) => void = () => {};
+  // A cancelled take stays cancelled even if the driver traps the signal and exits
+  // 0, and cancelling during encoding aborts ffmpeg; handlers stay installed until
+  // everything (including temp-frame cleanup) is done.
+  let received: NodeJS.Signals | undefined;
+  const cancel = new AbortController();
+  const onSignal = (signal: NodeJS.Signals) => () => {
+    received ??= signal;
+    cancel.abort();
+    killTree(signal);
+    setTimeout(() => killTree("SIGKILL"), KILL_GRACE_MS).unref();
+  };
+  const onInt = onSignal("SIGINT");
+  const onTerm = onSignal("SIGTERM");
+  process.on("SIGINT", onInt);
+  process.on("SIGTERM", onTerm);
+  const signalStatus = (name: NodeJS.Signals) => 128 + (os.constants.signals[name] ?? 15);
   try {
     recording = await startRecording(client, output, {
       fps: num(flags, "fps"),
@@ -338,26 +355,16 @@ async function recordAroundCommand(
       detached: process.platform !== "win32",
       env: { ...env, OBSIDIAN_E2E_CDP_PORT: String(cdpPort) },
     });
-    const killTree = (signal: NodeJS.Signals) => {
+    killTree = (signal) => {
       try {
-        if (child.pid !== undefined && process.platform !== "win32")
+        if (child.pid !== undefined && process.platform !== "win32") {
           process.kill(-child.pid, signal);
-        else child.kill(signal);
+        } else child.kill(signal);
       } catch {
         // already gone
       }
     };
-    // A cancelled take stays cancelled even if the driver traps the signal and exits 0.
-    let received: NodeJS.Signals | undefined;
-    const onSignal = (signal: NodeJS.Signals) => () => {
-      received ??= signal;
-      killTree(signal);
-      setTimeout(() => killTree("SIGKILL"), KILL_GRACE_MS).unref();
-    };
-    const onInt = onSignal("SIGINT");
-    const onTerm = onSignal("SIGTERM");
-    process.on("SIGINT", onInt);
-    process.on("SIGTERM", onTerm);
+    if (received) killTree(received);
     let timedOut = false;
     const timer = setTimeout(
       () => {
@@ -374,16 +381,11 @@ async function recordAroundCommand(
         resolve(127);
       });
       child.on("close", (code, signal) => {
-        const signalStatus = (name: NodeJS.Signals) => 128 + (os.constants.signals[name] ?? 15);
         if (received) resolve(signalStatus(received));
         else if (timedOut) resolve(124);
         else resolve(signal ? signalStatus(signal) : (code ?? 1));
       });
-    }).finally(() => {
-      clearTimeout(timer);
-      process.off("SIGINT", onInt);
-      process.off("SIGTERM", onTerm);
-    });
+    }).finally(() => clearTimeout(timer));
     if (status !== 0) {
       killTree("SIGKILL"); // stragglers of a failed/aborted driver
       await recording.abort();
@@ -394,10 +396,18 @@ async function recordAroundCommand(
     }
     const current = recording;
     recording = undefined;
-    json(await current.stop());
+    try {
+      json(await current.stop({ signal: cancel.signal }));
+    } catch (error) {
+      if (!received) throw error;
+      err(`capture record: cancelled by ${received} while encoding; recording discarded\n`);
+      return signalStatus(received);
+    }
     return 0;
   } finally {
     await recording?.abort();
+    process.off("SIGINT", onInt);
+    process.off("SIGTERM", onTerm);
     client.close();
   }
 }

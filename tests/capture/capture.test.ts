@@ -318,11 +318,11 @@ describe("capture record", () => {
     expect(() => encoderArgs("x.gif", 10)).toThrow(/Unsupported recording format/);
   });
 
-  test("abort stops the screencast and leaves no frames or output behind", async () => {
+  test("abort stops the screencast, removes frames, and never touches an existing output", async () => {
     const fake = await fakeClient(() => ({ result: {} }));
     const dir = await createTempDir(tempDirectories, "capture-rec-");
     const output = path.join(dir, "take.webm");
-    await fs.writeFile(output, "stale partial");
+    await fs.writeFile(output, "previous good take");
     const before = new Set(await fs.readdir(os.tmpdir()));
     const recording = await startRecording(fake.client, output);
     fake.emit("Page.screencastFrame", {
@@ -336,7 +336,7 @@ describe("capture record", () => {
       (name) => name.startsWith("obsidian-e2e-rec-") && !before.has(name),
     );
     expect(leftovers).toEqual([]);
-    await expect(fs.stat(output)).rejects.toThrow();
+    expect(await fs.readFile(output, "utf8")).toBe("previous good take");
     const methods = fake.sent.map((m) => m.method);
     expect(methods).toContain("Page.screencastFrameAck");
     expect(methods).toContain("Page.stopScreencast");

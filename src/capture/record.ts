@@ -20,9 +20,13 @@ export interface RecordOptions {
 }
 
 export interface Recording {
-  /** Stop, encode, verify and clean up. Rejects (and removes the output) if encoding fails. */
-  stop(): Promise<RecordingResult>;
-  /** Stop and discard everything (temp frames and any partial output). Never throws. */
+  /**
+   * Stop, encode, verify and clean up. The output is written to a sibling
+   * partial file and only renamed into place once verified, so a failed or
+   * `signal`-cancelled encode never replaces an existing file.
+   */
+  stop(options?: { signal?: AbortSignal }): Promise<RecordingResult>;
+  /** Stop and discard this take's temp frames. Never touches `output`; never throws. */
   abort(): Promise<void>;
 }
 
@@ -202,12 +206,16 @@ export async function startRecording(
       finished = true;
       await cleanupPage().catch(() => {});
       await removeDir().catch(() => {});
-      await fs.rm(output, { force: true }).catch(() => {});
     },
-    async stop() {
+    async stop(stopOptions = {}) {
       if (finished) throw new Error("recording already stopped");
       finished = true;
       const stopSeconds = Date.now() / 1000;
+      const ext = path.extname(output);
+      const partial = path.join(
+        path.dirname(path.resolve(output)),
+        `.${path.basename(output, ext)}.partial-${process.pid}${ext}`,
+      );
       try {
         await cleanupPage();
         if (sessionError) throw sessionError;
@@ -224,20 +232,24 @@ export async function startRecording(
         const list = path.join(dir, "frames.ffconcat");
         await fs.writeFile(list, buildConcatList(frames, startSeconds, stopSeconds, 1 / fps));
         await fs.mkdir(path.dirname(path.resolve(output)), { recursive: true });
-        await runTool("ffmpeg", [
-          "-v",
-          "error",
-          "-y",
-          "-f",
-          "concat",
-          "-safe",
-          "0",
-          "-i",
-          list,
-          ...encoderArgs(output, fps),
-          output,
-        ]);
-        const info = await probeMedia(output);
+        await runTool(
+          "ffmpeg",
+          [
+            "-v",
+            "error",
+            "-y",
+            "-f",
+            "concat",
+            "-safe",
+            "0",
+            "-i",
+            list,
+            ...encoderArgs(output, fps),
+            partial,
+          ],
+          stopOptions.signal,
+        );
+        const info = await probeMedia(partial);
         const wallSeconds = stopSeconds - startSeconds;
         if (
           info.durationSeconds === undefined ||
@@ -247,9 +259,11 @@ export async function startRecording(
             `Encoded duration ${info.durationSeconds}s does not match wall-clock ${wallSeconds.toFixed(2)}s`,
           );
         }
+        if (stopOptions.signal?.aborted) throw new Error("recording cancelled");
+        await fs.rename(partial, output);
         return { ...info, path: path.resolve(output), wallSeconds, capturedFrames: frames.length };
       } catch (error) {
-        await fs.rm(output, { force: true }).catch(() => {});
+        await fs.rm(partial, { force: true }).catch(() => {});
         throw error;
       } finally {
         await removeDir().catch(() => {});
