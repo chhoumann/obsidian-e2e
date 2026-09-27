@@ -29,6 +29,8 @@ export interface RecordOptions {
   cursor?: boolean;
   /** Keep the raw capture directory (for debugging); otherwise always deleted. */
   keepFrames?: boolean;
+  /** Cancels setup (e.g. waiting for x11grab's first frame); rejects startRecording. */
+  signal?: AbortSignal;
 }
 
 export interface Recording {
@@ -190,7 +192,11 @@ async function sleep(ms: number): Promise<void> {
 /** Cleanup must not hang on a renderer that stopped answering CDP. */
 const CLEANUP_TIMEOUT_MS = 3000;
 async function withinCleanupTimeout(step: Promise<unknown>): Promise<void> {
-  await Promise.race([step.catch(() => {}), sleep(CLEANUP_TIMEOUT_MS)]);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<void>((resolve) => {
+    timer = setTimeout(resolve, CLEANUP_TIMEOUT_MS);
+  });
+  await Promise.race([step.catch(() => {}), deadline]).finally(() => clearTimeout(timer));
 }
 
 /** Frames arrive ~50-170 ms after their swap time; wait for those in flight at stop. */
@@ -305,7 +311,12 @@ export async function detectX11Target(client: CdpClient): Promise<X11Target | { 
   );
 }
 
-async function startX11Capture(target: X11Target, dir: string, fps: number): Promise<Capture> {
+async function startX11Capture(
+  target: X11Target,
+  dir: string,
+  fps: number,
+  signal?: AbortSignal,
+): Promise<Capture> {
   const file = path.join(dir, "x11.mkv");
   const { x, y, width, height } = target.region;
   const child = spawn(
@@ -392,11 +403,19 @@ async function startX11Capture(target: X11Target, dir: string, fps: number): Pro
         10_000,
       );
     });
-    await Promise.race([firstFrame, failed, startupTimeout]).finally(() =>
-      clearTimeout(startupTimer),
-    );
+    let onAbort: () => void = () => {};
+    const aborted = new Promise<never>((_, reject) => {
+      onAbort = () => reject(new Error("recording setup cancelled"));
+      if (signal?.aborted) onAbort();
+      signal?.addEventListener("abort", onAbort, { once: true });
+    });
+    await Promise.race([firstFrame, failed, startupTimeout, aborted]).finally(() => {
+      clearTimeout(startupTimer);
+      signal?.removeEventListener("abort", onAbort);
+    });
   } catch (error) {
     child.kill("SIGKILL");
+    await exited; // never return while the grab process is still alive
     throw error;
   }
   failed.catch(() => {});
@@ -485,9 +504,9 @@ export async function startRecording(
     capture = await (async () => {
       if (x11) {
         try {
-          return await startX11Capture(x11, dir, fps);
+          return await startX11Capture(x11, dir, fps, options.signal);
         } catch (error) {
-          if (requested === "x11") throw error;
+          if (requested === "x11" || options.signal?.aborted) throw error;
           backend = "screencast";
           backendNote = `x11 failed to start (${(error as Error).message}); used screencast`;
         }

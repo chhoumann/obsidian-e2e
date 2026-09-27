@@ -375,6 +375,7 @@ async function recordAroundCommand(
       cursor: flags.cursor === true,
       keepFrames: flags["keep-failed-frames"] === true,
       backend: parseBackend(str(flags, "backend")),
+      signal: cancel.signal,
     });
     const cancelled = new Promise<undefined>((resolve) => {
       if (cancel.signal.aborted) resolve(undefined);
@@ -382,7 +383,15 @@ async function recordAroundCommand(
     });
     recording = await Promise.race([starting, cancelled]);
     if (!recording || received) {
-      void starting.then((late) => late.abort()).catch(() => {});
+      // Setup sees the same signal: wait (bounded) for it to unwind so no
+      // recorder process or temp directory outlives this return.
+      let settleTimer: ReturnType<typeof setTimeout> | undefined;
+      await Promise.race([
+        starting.then((late) => late.abort()).catch(() => {}),
+        new Promise<void>((resolve) => {
+          settleTimer = setTimeout(resolve, 5000);
+        }),
+      ]).finally(() => clearTimeout(settleTimer));
       await recording?.abort();
       recording = undefined;
       err(`capture record: cancelled by ${received} before the take started\n`);
