@@ -306,6 +306,10 @@ describe("capture record", () => {
       "ffconcat version 1.0\nfile '/t/a.jpg'\nduration 0.5000\nfile '/t/b.jpg'\nduration 1.5000\nfile '/t/b.jpg'\n",
     );
     expect(() => buildConcatList([], 0, 1)).toThrow(/no frames/);
+    // An instant take still holds its only frame for one output frame.
+    expect(buildConcatList([{ file: "/t/a.jpg", timestamp: 5 }], 5, 5.01, 0.1)).toContain(
+      "duration 0.1000",
+    );
   });
 
   test("only webm/mp4 outputs are accepted", () => {

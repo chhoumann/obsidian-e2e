@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import os from "node:os";
 import process from "node:process";
 
 import {
@@ -346,7 +347,12 @@ async function recordAroundCommand(
         // already gone
       }
     };
-    const onSignal = (signal: NodeJS.Signals) => () => killTree(signal);
+    // A cancelled take stays cancelled even if the driver traps the signal and exits 0.
+    let received: NodeJS.Signals | undefined;
+    const onSignal = (signal: NodeJS.Signals) => () => {
+      received ??= signal;
+      killTree(signal);
+    };
     const onInt = onSignal("SIGINT");
     const onTerm = onSignal("SIGTERM");
     process.on("SIGINT", onInt);
@@ -366,9 +372,12 @@ async function recordAroundCommand(
         err(`capture record: failed to run ${file}: ${error.message}\n`);
         resolve(127);
       });
-      child.on("close", (code, signal) =>
-        resolve(timedOut ? 124 : signal ? 128 + (signal === "SIGINT" ? 2 : 15) : (code ?? 1)),
-      );
+      child.on("close", (code, signal) => {
+        const signalStatus = (name: NodeJS.Signals) => 128 + (os.constants.signals[name] ?? 15);
+        if (received) resolve(signalStatus(received));
+        else if (timedOut) resolve(124);
+        else resolve(signal ? signalStatus(signal) : (code ?? 1));
+      });
     }).finally(() => {
       clearTimeout(timer);
       process.off("SIGINT", onInt);
@@ -378,7 +387,7 @@ async function recordAroundCommand(
       killTree("SIGKILL"); // stragglers of a failed/aborted driver
       await recording.abort();
       err(
-        `capture record: command ${timedOut ? "timed out" : `exited ${status}`}; recording discarded\n`,
+        `capture record: ${received ? `cancelled by ${received}` : timedOut ? "command timed out" : `command exited ${status}`}; recording discarded\n`,
       );
       return status;
     }

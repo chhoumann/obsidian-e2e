@@ -48,6 +48,8 @@ export function buildConcatList(
   frames: Frame[],
   startSeconds: number,
   stopSeconds: number,
+  /** The final frame is held at least this long so very short takes still encode. */
+  minLastSeconds = 0,
 ): string {
   if (frames.length === 0) throw new Error("no frames to encode");
   const lines = ["ffconcat version 1.0"];
@@ -55,7 +57,8 @@ export function buildConcatList(
     const begin = index === 0 ? Math.min(startSeconds, frame.timestamp) : frame.timestamp;
     const end = index + 1 < frames.length ? frames[index + 1]!.timestamp : stopSeconds;
     lines.push(`file '${frame.file.replaceAll("'", "'\\''")}'`);
-    lines.push(`duration ${Math.max(0.001, end - begin).toFixed(4)}`);
+    const last = index + 1 === frames.length;
+    lines.push(`duration ${Math.max(last ? minLastSeconds : 0.001, end - begin).toFixed(4)}`);
   });
   // The concat demuxer ignores the last entry's duration unless it is repeated.
   lines.push(`file '${frames.at(-1)!.file.replaceAll("'", "'\\''")}'`);
@@ -219,7 +222,7 @@ export async function startRecording(
           frames.push({ file, timestamp: startSeconds });
         }
         const list = path.join(dir, "frames.ffconcat");
-        await fs.writeFile(list, buildConcatList(frames, startSeconds, stopSeconds));
+        await fs.writeFile(list, buildConcatList(frames, startSeconds, stopSeconds, 1 / fps));
         await fs.mkdir(path.dirname(path.resolve(output)), { recursive: true });
         await runTool("ffmpeg", [
           "-v",
