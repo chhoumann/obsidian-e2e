@@ -1,11 +1,11 @@
 import { spawn } from "node:child_process";
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 
 import { toShellExports, writeJson } from "../runner/fs-utils";
-import { stableVaultId } from "../runner/instance";
 import { ensureSecureDir } from "../runner/security";
 
 export const DEFAULT_CDP_PORT = 9333;
@@ -63,6 +63,16 @@ function defaultObsidianApp(platform: NodeJS.Platform): string {
   );
 }
 
+/**
+ * obsidian.json vault key (16 hex of the path hash, like the runner's). Kept
+ * local on purpose: importing runner/instance would drag version-guard into a
+ * chunk shared with this entry and split the runner bundle, which downstream
+ * Linux bridge patches rely on staying in one chunk.
+ */
+function captureVaultId(vaultPath: string): string {
+  return crypto.createHash("sha256").update(path.resolve(vaultPath)).digest("hex").slice(0, 16);
+}
+
 /** Pure path resolution; no filesystem access. */
 export function resolveCaptureProfile(
   options: CaptureLaunchOptions,
@@ -101,7 +111,11 @@ export async function prepareCaptureProfile(
       cli: true,
       updateDisabled: true,
       vaults: {
-        [stableVaultId(profile.vaultPath)]: { open: true, path: profile.vaultPath, ts: Date.now() },
+        [captureVaultId(profile.vaultPath)]: {
+          open: true,
+          path: profile.vaultPath,
+          ts: Date.now(),
+        },
       },
     },
     { mode: 0o600 },
