@@ -448,6 +448,14 @@ describe("capture record", () => {
     expect(leftovers).toEqual([]);
   }, 10_000);
 
+  test("aborting cancels x11 detection that never gets an answer", async () => {
+    const fake = await fakeClient(() => ({ id: -1 }));
+    const controller = new AbortController();
+    const starting = startRecording(fake.client, "/tmp/never.webm", { signal: controller.signal });
+    setTimeout(() => controller.abort(), 20);
+    await expect(starting).rejects.toThrow(/setup cancelled/);
+  });
+
   test("only webm/mp4 outputs are accepted", () => {
     expect(encoderArgs("x.webm", 10)).toContain("libvpx-vp9");
     expect(encoderArgs("x.mp4", 10)).toContain("libx264");

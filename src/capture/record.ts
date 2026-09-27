@@ -486,9 +486,12 @@ export async function startRecording(
   let backendNote: string | undefined;
   let x11: X11Target | undefined;
   if (requested !== "screencast") {
-    const detected = await detectX11Target(client).catch((error: Error) => ({
-      reason: error.message,
-    }));
+    const detected = await abortable(detectX11Target(client), options.signal).catch(
+      (error: Error) => {
+        if (options.signal?.aborted) throw error;
+        return { reason: error.message };
+      },
+    );
     if (!detected || "reason" in detected) {
       const reason = detected?.reason ?? "renderer did not report a window";
       if (requested === "x11") throw new Error(`x11 backend unavailable: ${reason}`);
