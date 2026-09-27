@@ -56,26 +56,40 @@ export async function connectCapture(options: ConnectOptions = {}): Promise<CdpC
   const port = options.port ?? DEFAULT_CDP_PORT;
   const deadline = Date.now() + (options.timeoutMs ?? 30_000);
   const wanted = options.window;
-  const selectTarget = (targets: CdpTargetInfo[]) =>
+  const matches = (t: CdpTargetInfo) =>
     wanted === undefined
-      ? targets.find(isObsidianPage)
-      : targets.find(
-          (t) =>
-            t.type === "page" &&
-            Boolean(t.webSocketDebuggerUrl) &&
-            ((t.title ?? "").includes(wanted) || (t.url ?? "").includes(wanted)),
-        );
+      ? isObsidianPage(t)
+      : t.type === "page" &&
+        Boolean(t.webSocketDebuggerUrl) &&
+        ((t.title ?? "").includes(wanted) || (t.url ?? "").includes(wanted));
+  // Popout windows (Settings in 1.13+, pop-out tabs) are app:// pages too, so the
+  // main window is identified by content, not by /json order.
   const readyExpression =
     wanted === undefined
-      ? "typeof app !== 'undefined' && app.workspace?.layoutReady === true"
+      ? "typeof app !== 'undefined' && app.workspace?.layoutReady === true && " +
+        "!document.body.classList.contains('is-popout-window')"
       : "document.readyState === 'complete'";
+  const fetchJson =
+    options.deps?.fetchJson ??
+    (async (url: string) => (await fetch(url)).json() as Promise<unknown>);
   let lastError = "not attempted";
   while (true) {
     let client: CdpClient | undefined;
     try {
-      client = await CdpClient.connect(port, { selectTarget, ...options.deps });
-      if (await evaluate<boolean>(client, readyExpression)) return client;
-      lastError = wanted === undefined ? "workspace layout not ready" : "window still loading";
+      const targets = (await fetchJson(`http://localhost:${port}/json`)) as CdpTargetInfo[];
+      const candidates = targets.filter(matches);
+      if (candidates.length === 0) lastError = `no matching page target on CDP port ${port}`;
+      for (const candidate of candidates) {
+        client = await CdpClient.connect(port, {
+          ...options.deps,
+          fetchJson: () => Promise.resolve([candidate]),
+          selectTarget: (list) => list[0],
+        });
+        if (await evaluate<boolean>(client, readyExpression)) return client;
+        client.close();
+        client = undefined;
+        lastError = wanted === undefined ? "main workspace not ready" : "window still loading";
+      }
     } catch (error) {
       lastError = error instanceof Error ? error.message : String(error);
     }

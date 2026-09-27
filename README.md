@@ -288,7 +288,7 @@ optional `gifsicle` and the fonts you ask for (Debian/Ubuntu:
 obsidian-e2e provision --root /tmp/capture --vault Demo
 eval "$(obsidian-e2e capture launch --vault /tmp/capture/Demo --print-env)"
 amp orb service start obsidian-capture \
-  --command "pnpm exec obsidian-e2e capture launch --vault /tmp/capture/Demo"   # or tmux/terminal
+  --command "$PWD/node_modules/.bin/obsidian-e2e capture launch --vault /tmp/capture/Demo"   # or tmux/terminal
 HOME=$OBSIDIAN_E2E_CAPTURE_HOME obsidian vault=Demo plugins:restrict off # enable community plugins
 
 obsidian-e2e capture prepare --width 1280 --height 800 --scale 2 \

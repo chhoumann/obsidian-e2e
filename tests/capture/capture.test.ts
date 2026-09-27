@@ -10,7 +10,7 @@ import {
   prepareCaptureProfile,
   resolveCaptureProfile,
 } from "../../src/capture/launch";
-import { captureScreenshot, pngSize, typeText } from "../../src/capture/page";
+import { captureScreenshot, connectCapture, pngSize, typeText } from "../../src/capture/page";
 import { buildConcatList, encoderArgs, startRecording } from "../../src/capture/record";
 import { CdpClient, type CdpSocket } from "../../src/runner/android/cdp";
 import { cleanupTempDirectories, createTempDir } from "../helpers/create-temp-dir";
@@ -225,6 +225,52 @@ describe("capture screenshot", () => {
   test("pngSize rejects non-PNG bytes", () => {
     expect(pngSize(Buffer.from(pngHeader(3, 4), "base64"))).toEqual({ width: 3, height: 4 });
     expect(() => pngSize(Buffer.from("nope"))).toThrow(/not a PNG/);
+  });
+});
+
+describe("capture connect", () => {
+  test("picks the main workspace even when a popout is listed first", async () => {
+    const socketFor = (isMain: boolean): CdpSocket => {
+      let listener: (data: string) => void = () => {};
+      return {
+        send: (data) => {
+          const message = JSON.parse(data) as { id: number; params: { expression: string } };
+          const popoutCheck = message.params.expression.includes("is-popout-window");
+          queueMicrotask(() =>
+            listener(JSON.stringify({ id: message.id, ...value(popoutCheck ? isMain : true) })),
+          );
+        },
+        close: () => {},
+        onMessage: (l) => {
+          listener = l;
+        },
+      };
+    };
+    const connected: string[] = [];
+    const client = await connectCapture({
+      timeoutMs: 1000,
+      deps: {
+        fetchJson: () =>
+          Promise.resolve([
+            {
+              type: "page",
+              url: "app://obsidian.md/index.html",
+              webSocketDebuggerUrl: "ws://popout",
+            },
+            {
+              type: "page",
+              url: "app://obsidian.md/index.html",
+              webSocketDebuggerUrl: "ws://main",
+            },
+          ]),
+        connect: (url) => {
+          connected.push(url);
+          return Promise.resolve(socketFor(url === "ws://main"));
+        },
+      },
+    });
+    expect(client).toBeInstanceOf(CdpClient);
+    expect(connected).toEqual(["ws://popout", "ws://main"]);
   });
 });
 

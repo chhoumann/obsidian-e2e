@@ -68,6 +68,9 @@ export function parseCaptureArgs(argv: readonly string[], spec: Spec): CaptureAr
   return { flags, positionals, command: [] };
 }
 
+/** Grace between SIGTERM and SIGKILL for a timed-out record command. */
+const KILL_GRACE_MS = 3000;
+
 const CONNECT = { numbers: ["port", "timeout"], values: ["window"] };
 
 const SPECS: Record<string, Spec> = {
@@ -328,11 +331,22 @@ async function recordAroundCommand(
       keepFrames: flags["keep-failed-frames"] === true,
     });
     const [file, ...commandArgs] = args.command;
+    // Own process group, so a timeout/signal reaches the driver's children too.
     const child = spawn(file!, commandArgs, {
       stdio: "inherit",
+      detached: process.platform !== "win32",
       env: { ...env, OBSIDIAN_E2E_CDP_PORT: String(cdpPort) },
     });
-    const onSignal = (signal: NodeJS.Signals) => () => child.kill(signal);
+    const killTree = (signal: NodeJS.Signals) => {
+      try {
+        if (child.pid !== undefined && process.platform !== "win32")
+          process.kill(-child.pid, signal);
+        else child.kill(signal);
+      } catch {
+        // already gone
+      }
+    };
+    const onSignal = (signal: NodeJS.Signals) => () => killTree(signal);
     const onInt = onSignal("SIGINT");
     const onTerm = onSignal("SIGTERM");
     process.on("SIGINT", onInt);
@@ -341,7 +355,9 @@ async function recordAroundCommand(
     const timer = setTimeout(
       () => {
         timedOut = true;
-        child.kill("SIGTERM");
+        killTree("SIGTERM");
+        // A command that ignores SIGTERM must not keep the recording open.
+        setTimeout(() => killTree("SIGKILL"), KILL_GRACE_MS).unref();
       },
       (num(flags, "max-seconds") ?? 300) * 1000,
     );
@@ -359,6 +375,7 @@ async function recordAroundCommand(
       process.off("SIGTERM", onTerm);
     });
     if (status !== 0) {
+      killTree("SIGKILL"); // stragglers of a failed/aborted driver
       await recording.abort();
       err(
         `capture record: command ${timedOut ? "timed out" : `exited ${status}`}; recording discarded\n`,
