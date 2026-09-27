@@ -258,7 +258,8 @@ describe("trustVaultAndVerifyPlugin", () => {
 
   test("waits for a renderer created after a reloading Restricted Mode toggle", async () => {
     const probe: ReadyProbe = { kind: "command", args: ["quickadd:list"], match: '"ok":true' };
-    const reloadReplies = ['Error: Command "eval" not found.', "=> false", "=> true"];
+    // The last reply echoes the expression, as some CLI builds do.
+    const reloadReplies = ['Error: Command "eval" not found.', "=> false", "cond => true"];
     const { execFile, calls } = makeExec((call) => {
       if (call.args.includes("plugins:restrict")) {
         return ok("Restricted mode disabled. Reloading...");

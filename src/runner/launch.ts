@@ -296,7 +296,8 @@ async function waitForRenderer(
       const { stdout } = await execObsidian(target, probeArgs, deps, {
         timeout: READY_PROBE_TIMEOUT_MS,
       });
-      if (stdout.trim() === "=> true") return;
+      // Suffix match: tolerate a CLI that echoes the expression before the result.
+      if (stdout.trim().endsWith("=> true")) return;
       lastOutput = stdout.trim();
     } catch (error) {
       lastOutput = commandErrorMessage(error);
