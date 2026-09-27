@@ -30,6 +30,27 @@ export async function runTool(
   }
 }
 
+/** Write via a sibling partial file, verify it, then rename over `output`. */
+async function writeVerified(
+  output: string,
+  write: (partial: string) => Promise<void>,
+): Promise<MediaInfo> {
+  const ext = path.extname(output);
+  const partial = path.join(
+    path.dirname(path.resolve(output)),
+    `.${path.basename(output, ext)}.partial-${process.pid}${ext}`,
+  );
+  await fs.mkdir(path.dirname(partial), { recursive: true });
+  try {
+    await write(partial);
+    const info = await probeMedia(partial);
+    await fs.rename(partial, output);
+    return info;
+  } finally {
+    await fs.rm(partial, { force: true });
+  }
+}
+
 export interface MediaInfo {
   width: number;
   height: number;
@@ -108,22 +129,23 @@ export async function videoToGif(
         "[b][p]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle",
       raw,
     ]);
-    await fs.mkdir(path.dirname(path.resolve(output)), { recursive: true });
     let optimized = true;
-    try {
-      await runTool("gifsicle", [
-        "-O3",
-        ...(lossy > 0 ? [`--lossy=${lossy}`] : []),
-        raw,
-        "-o",
-        output,
-      ]);
-    } catch (error) {
-      if (!String((error as Error).message).includes("not installed")) throw error;
-      optimized = false;
-      await fs.copyFile(raw, output);
-    }
-    return { ...(await probeMedia(output)), path: path.resolve(output), optimized };
+    const info = await writeVerified(output, async (partial) => {
+      try {
+        await runTool("gifsicle", [
+          "-O3",
+          ...(lossy > 0 ? [`--lossy=${lossy}`] : []),
+          raw,
+          "-o",
+          partial,
+        ]);
+      } catch (error) {
+        if (!String((error as Error).message).includes("not installed")) throw error;
+        optimized = false;
+        await fs.copyFile(raw, partial);
+      }
+    });
+    return { ...info, path: path.resolve(output), optimized };
   } finally {
     await fs.rm(dir, { recursive: true, force: true });
   }
@@ -149,20 +171,21 @@ export async function contactSheet(
   const { durationSeconds } = await probeMedia(input);
   const tiles = Math.max(1, Math.ceil((durationSeconds ?? every) / every));
   const rows = Math.ceil(tiles / columns);
-  await fs.mkdir(path.dirname(path.resolve(output)), { recursive: true });
-  await runTool("ffmpeg", [
-    "-v",
-    "error",
-    "-y",
-    "-i",
-    input,
-    "-vf",
-    `fps=1/${every},scale=${tileWidth}:-1,tile=${columns}x${rows}:padding=4:color=white`,
-    "-frames:v",
-    "1",
-    "-update",
-    "1",
-    output,
-  ]);
-  return { ...(await probeMedia(output)), path: path.resolve(output), tiles };
+  const info = await writeVerified(output, async (partial) => {
+    await runTool("ffmpeg", [
+      "-v",
+      "error",
+      "-y",
+      "-i",
+      input,
+      "-vf",
+      `fps=1/${every},scale=${tileWidth}:-1,tile=${columns}x${rows}:padding=4:color=white`,
+      "-frames:v",
+      "1",
+      "-update",
+      "1",
+      partial,
+    ]);
+  });
+  return { ...info, path: path.resolve(output), tiles };
 }
