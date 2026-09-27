@@ -11,9 +11,12 @@ import {
   type ParsedArgs,
 } from "./args";
 import { loadRunnerConfig as realLoadRunnerConfig } from "./config";
-import { ensureObsidianInstance as realEnsureObsidianInstance } from "./ensure";
+import {
+  ensureObsidianInstance as realEnsureObsidianInstance,
+  guardWarmInstance as realGuardWarmInstance,
+} from "./ensure";
 import { INSTANCE_MARKER_FILE, resolveInstanceOptions, toInstanceShellExports } from "./instance";
-import type { ObsidianExecDependencies } from "./launch";
+import { isInstanceReady, type ObsidianExecDependencies, waitForMobileEmulation } from "./launch";
 import {
   provisionShellExports,
   provisionVault as realProvisionVault,
@@ -52,6 +55,7 @@ export interface CliDependencies {
   stderr?: (text: string) => void;
   loadRunnerConfig?: typeof realLoadRunnerConfig;
   ensureObsidianInstance?: typeof realEnsureObsidianInstance;
+  guardWarmInstance?: typeof realGuardWarmInstance;
   provisionVault?: typeof realProvisionVault;
   stopInstance?: typeof realStopInstance;
   reapOrphanedInstances?: typeof realReapOrphanedInstances;
@@ -89,7 +93,11 @@ const STOP_SPEC: ArgsParserSpec = {
 
 const RUN_SPEC: ArgsParserSpec = {
   valueOptions: SHARED_VALUE_OPTIONS,
-  booleanOptions: { ...SHARED_BOOLEAN_OPTIONS, "--skip-version-guard": "skipVersionGuard" },
+  booleanOptions: {
+    ...SHARED_BOOLEAN_OPTIONS,
+    "--reload": "reload",
+    "--skip-version-guard": "skipVersionGuard",
+  },
 };
 
 /** Isolated HOME environment for the forwarded `obsidian` command. */
@@ -359,10 +367,35 @@ async function runRun(
   // command; an empty forward falls back to the config's default command.
   const command = parsed.rest.length > 0 ? parsed.rest : config.defaultCommand;
 
-  const machine = options.json;
-  await bringUpInstance(options, config, deps, machine ? err : out);
+  // A warm instance serving this vault is attached to as-is: no provisioning,
+  // plugin reload, Restricted Mode toggle, or ready probe. Those would reset
+  // plugin and UI state between separate commands and would re-enable a plugin
+  // that was disabled on purpose. `--reload` (and `start`) redeploy explicitly.
+  // The read-only version guard still runs, so a mid-session update fails closed.
+  let warm = false;
+  if (parsed.options.reload !== true) {
+    // Validate the root, then the instance dir (parent-first), before the socket
+    // probe, marker read, or forwarded command follow any path inside it.
+    await ensureSecureDir(options.profileRoot);
+    await assertSecureDirIfPresent(options.instancePath);
+    warm = await isInstanceReady(options, deps.exec);
+    if (warm) {
+      const guardWarmInstance = deps.guardWarmInstance ?? realGuardWarmInstance;
+      await guardWarmInstance(options, { log: (message) => emit(err, message) });
+    }
+  }
+  if (!warm) {
+    await bringUpInstance(options, config, deps, options.json ? err : out);
+  }
 
-  return spawnObsidian(options, command, deps);
+  const code = await spawnObsidian(options, command, deps);
+  // `dev:mobile on|off` reloads the renderer after replying; hold the exit until
+  // the reloaded app is ready so the next command cannot race the reload.
+  const [verb, mode] = command;
+  if (code === 0 && verb === "dev:mobile" && (mode === "on" || mode === "off")) {
+    await waitForMobileEmulation(options, mode === "on", deps.exec);
+  }
+  return code;
 }
 
 /**
@@ -469,7 +502,7 @@ function topLevelHelp(): string {
     "  provision   Lay down the worktree-local vault (pure filesystem, no launch).",
     "  start       Provision, prepare the profile, and bring the instance up and verified.",
     "  stop        Terminate this worktree's instance and remove its profile.",
-    "  run         Bring the instance up, then forward a command to the obsidian CLI.",
+    "  run         Forward a command to the obsidian CLI, launching the instance if needed.",
     "  android     Drive the real Obsidian Android app on an emulator (start|stop|run).",
     "",
     "Run `obsidian-e2e <command> --help` for per-command flags.",
@@ -519,12 +552,16 @@ function subcommandHelp(subcommand: Exclude<Subcommand, "android">): string {
       return [
         "obsidian-e2e run [flags] [-- <obsidian command>]",
         "",
-        "Bring the instance up (reaping instances whose backing worktree is gone), then",
-        "forward the command after the first non-option token (or after `--`) to the",
+        "Forward the command after the first non-option token (or after `--`) to the",
         "obsidian CLI against this vault. With no command, the config's default runs.",
+        "A warm instance already serving this vault is used as-is: the plugin is not",
+        "reloaded or re-verified, so plugin and UI state survive between commands.",
+        "Otherwise the instance is brought up like `start` (reaping instances whose",
+        "backing worktree is gone).",
         "",
         "Flags:",
         SHARED_FLAGS,
+        "  --reload                redeploy like `start` first: reload and verify the plugin",
         "  --skip-version-guard    skip the minAppVersion / mid-session update guard",
       ].join("\n");
   }

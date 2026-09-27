@@ -256,6 +256,28 @@ describe("trustVaultAndVerifyPlugin", () => {
     expect(calls[1]?.args).toEqual(["vault=quickadd-worktree-a", "quickadd:list"]);
   });
 
+  test("waits for a renderer created after a reloading Restricted Mode toggle", async () => {
+    const probe: ReadyProbe = { kind: "command", args: ["quickadd:list"], match: '"ok":true' };
+    // The last reply echoes the expression, as some CLI builds do.
+    const reloadReplies = ['Error: Command "eval" not found.', "=> false", "cond => true"];
+    const { execFile, calls } = makeExec((call) => {
+      if (call.args.includes("plugins:restrict")) {
+        return ok("Restricted mode disabled. Reloading...");
+      }
+      if (call.args[1] === "eval") return ok(reloadReplies.shift() ?? "");
+      return ok('{"ok":true}');
+    });
+
+    await expect(trustVaultAndVerifyPlugin(target, probe, { execFile, ...fast })).resolves.toBe(
+      true,
+    );
+    const steps = calls.map((call) => call.args[1]);
+    expect(steps).toEqual(["plugins:restrict", "eval", "eval", "eval", "quickadd:list"]);
+    expect(calls[1]?.args[2]).toMatch(
+      /^code=performance\.timeOrigin > \d+ && app\.workspace\.layoutReady$/,
+    );
+  });
+
   test("throws after the deadline when the probe never matches", async () => {
     let clock = 0;
     const probe: ReadyProbe = { kind: "eval", code: "x", match: "=> true" };

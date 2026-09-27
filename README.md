@@ -115,9 +115,14 @@ Wire the bin into the same script names the AGENTS.md playbooks already use:
   reuse-and-reload a warm instance or launch a fresh one and verify the plugin.
 - `stop` - terminate this worktree's instance (SIGTERM, then SIGKILL for
   stragglers) and remove its profile. Safe to run when nothing is up.
-- `run` - bring the instance up, then forward the command after the first
-  non-option token (or after `--`) to the `obsidian` CLI. With no command, the
-  config's `defaultCommand` runs.
+- `run` - forward the command after the first non-option token (or after `--`)
+  to the `obsidian` CLI. With no command, the config's `defaultCommand` runs. A
+  warm instance already serving this vault is used as-is (no plugin reload, no
+  ready probe), so plugin and UI state such as an open modal, or a plugin you
+  disabled, survive between separate commands. With no warm instance, `run`
+  brings one up like `start`. Pass `--reload` to redeploy a rebuilt plugin
+  first. `run dev:mobile on|off` waits until the reloaded renderer reports the
+  new mode, so the next command does not race the reload.
 
 ```bash
 # Provision only, and load the vault env into the current shell:
@@ -137,7 +142,8 @@ Shared flags: `--vault --root --worktree --data --profile-root --obsidian-app
 --obsidian-bin --config` (value) and `--force --json --help` (boolean).
 Per-subcommand extras: `provision` adds `--print-env`; `start` adds `--print-env
 --no-launch --skip-version-guard`; `stop` adds `--dry-run --prune`; `run` adds
-`--skip-version-guard` and forwards everything after the first non-option token.
+`--reload --skip-version-guard` and forwards everything after the first
+non-option token.
 
 ### Env contract
 
@@ -214,15 +220,18 @@ sub-100ms timing needs CDP `Input.dispatchTouchEvent`.
 - **Version guard.** `start` and `run` refuse to launch (or to reuse a warm
   instance across) an Obsidian app-code version below the plugin's
   `minAppVersion`, and hard-fail reuse when Obsidian updated mid-session (the
-  running renderer no longer matches). Bypass with `--skip-version-guard`.
+  running renderer no longer matches). Bypass with `--skip-version-guard`. A
+  plain `run` against a warm instance still applies this guard, read-only,
+  before forwarding.
 - **Secure `/tmp` handling.** The profile root defaults under world-writable
   `/tmp`. Every path that creates, reads, or removes inside it refuses a
   symlinked, foreign-owned, or group/other-accessible directory and fails closed
   rather than following a planted link.
 - **Reaper semantics.** An instance is orphaned once its backing worktree is gone
-  from disk (the signature of a worktree removed on merge). `start`/`run` reap
-  orphans as a self-healing safety net, and `stop --prune` reaps them on demand;
-  a running-but-leaked instance for a live worktree is never reaped.
+  from disk (the signature of a worktree removed on merge). `start` and any
+  `run` that brings an instance up reap orphans as a self-healing safety net,
+  and `stop --prune` reaps them on demand; a running-but-leaked instance for a
+  live worktree is never reaped.
 
 ### Archive-hook cleanup (orca)
 
