@@ -187,6 +187,12 @@ async function sleep(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/** Cleanup must not hang on a renderer that stopped answering CDP. */
+const CLEANUP_TIMEOUT_MS = 3000;
+async function withinCleanupTimeout(step: Promise<unknown>): Promise<void> {
+  await Promise.race([step.catch(() => {}), sleep(CLEANUP_TIMEOUT_MS)]);
+}
+
 /** Frames arrive ~50-170 ms after their swap time; wait for those in flight at stop. */
 const SCREENCAST_DRAIN_MS = 250;
 
@@ -212,7 +218,7 @@ async function startScreencastCapture(
     client.call("Page.screencastFrameAck", { sessionId }).catch(() => {});
   });
   const stopScreencast = async () => {
-    await client.call("Page.stopScreencast").catch(() => {});
+    await withinCleanupTimeout(client.call("Page.stopScreencast"));
     unsubscribe();
     await Promise.all(writes);
   };
@@ -456,10 +462,12 @@ export async function startRecording(
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "obsidian-e2e-rec-"));
   const removeCursor = async () => {
     if (!options.cursor) return;
-    await evaluate(
-      client,
-      `window.__obsidianE2ECursor?.(); document.getElementById(${JSON.stringify(CURSOR_STYLE_ID)})?.remove(); true`,
-    ).catch(() => {});
+    await withinCleanupTimeout(
+      evaluate(
+        client,
+        `window.__obsidianE2ECursor?.(); document.getElementById(${JSON.stringify(CURSOR_STYLE_ID)})?.remove(); true`,
+      ),
+    );
   };
   const removeDir = async () => {
     if (!options.keepFrames) await fs.rm(dir, { recursive: true, force: true });
@@ -489,11 +497,38 @@ export async function startRecording(
     throw error;
   }
 
+  // x11grab records a fixed region: poll the window throughout the take so a
+  // move/resize/overlap that is later undone still fails it. An unanswered
+  // poll (e.g. mid-reload) is "unknown", not a violation.
+  let x11Problem: string | undefined;
+  let polling = false;
+  const monitor =
+    x11 && backend === "x11"
+      ? setInterval(() => {
+          if (polling || x11Problem) return;
+          polling = true;
+          void detectX11Target(client)
+            .then((now) => {
+              if (!now) return;
+              if ("reason" in now) x11Problem = now.reason;
+              else if (JSON.stringify(now.region) !== JSON.stringify(x11.region)) {
+                x11Problem = `window moved or resized (${JSON.stringify(x11.region)} -> ${JSON.stringify(now.region)})`;
+              }
+            })
+            .catch(() => {})
+            .finally(() => {
+              polling = false;
+            });
+        }, 500)
+      : undefined;
+  monitor?.unref();
+
   let finished = false;
   return {
     async abort() {
       if (finished) return;
       finished = true;
+      clearInterval(monitor);
       await capture.abort().catch(() => {});
       await removeCursor();
       await removeDir().catch(() => {});
@@ -508,7 +543,14 @@ export async function startRecording(
       );
       try {
         const source = await capture.finish();
+        clearInterval(monitor);
         if (stopOptions.signal?.aborted) throw new Error("recording cancelled");
+        if (x11Problem) {
+          throw new Error(
+            `The window was not capturable for the whole x11 take: ${x11Problem}; ` +
+              "keep its geometry fixed and unobscured or use --backend screencast",
+          );
+        }
         if (x11 && backend === "x11") {
           // x11grab records a fixed screen region, so a window that moved,
           // resized, or became minimized/hidden/off-screen/overlapped during the
@@ -561,6 +603,7 @@ export async function startRecording(
           ...source.stats,
         };
       } catch (error) {
+        clearInterval(monitor);
         await capture.abort().catch(() => {});
         await removeCursor();
         await fs.rm(partial, { force: true }).catch(() => {});

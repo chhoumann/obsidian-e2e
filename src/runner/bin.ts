@@ -14,9 +14,13 @@ import { runObsidianE2ECli } from "./cli";
 runObsidianE2ECli(process.argv.slice(2))
   .then((code) => {
     process.exitCode = code;
-    // A signal-cancelled run (128+n) must not linger on a socket whose peer is
-    // unresponsive (e.g. a WebSocket close handshake to a frozen app).
-    if (code >= 128) setTimeout(() => process.exit(code), 2000).unref();
+    // Capture commands and signal-cancelled runs (128+n) must not linger on a
+    // socket whose peer is unresponsive (a WebSocket close handshake to a
+    // frozen app). The timer is unref'd, so it only fires if something else is
+    // still holding the process open.
+    if (code >= 128 || process.argv[2] === "capture") {
+      setTimeout(() => process.exit(code), 2000).unref();
+    }
   })
   .catch((error: unknown) => {
     process.exitCode = 1;
