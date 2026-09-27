@@ -14,6 +14,8 @@ import {
   runObsidianE2ECli,
   spawnObsidian,
 } from "../../src/runner/cli";
+import { slugify } from "../../src/runner/fs-utils";
+import { stableInstanceId } from "../../src/runner/instance";
 import type { InstanceOptions, ResolvedRunnerConfig } from "../../src/runner/types";
 import { cleanupTempDirectories, createTempDir } from "../helpers/create-temp-dir";
 
@@ -202,9 +204,14 @@ describe("run command forwarding", () => {
 });
 
 describe("run against a warm instance", () => {
-  async function runWarm(argv: string[], evalReplies: string[] = []) {
+  async function runWarm(
+    argv: string[],
+    evalReplies: string[] = [],
+    plant?: (profileRoot: string, worktree: string) => Promise<void>,
+  ) {
     const worktree = await createTempDir(tempDirectories, "cli-run-warm-");
     const profileRoot = await createTempDir(tempDirectories, "cli-profile-");
+    await plant?.(profileRoot, worktree);
     const cliCalls: string[][] = [];
     let ensured = 0;
     let guarded = 0;
@@ -251,6 +258,16 @@ describe("run against a warm instance", () => {
     expect(result.guarded).toBe(1);
     expect(result.cliCalls.map((args) => args.slice(1))).toEqual([["vault", "info=path"]]);
     expect(result.forwarded).toEqual(["eval", "code=1"]);
+  });
+
+  test("refuses to attach through a symlinked instance directory", async () => {
+    const plantSymlink = async (profileRoot: string, worktree: string) => {
+      const vaultName = `quickadd-${slugify(path.basename(worktree))}`;
+      const instanceId = stableInstanceId(worktree, vaultName);
+      const elsewhere = await createTempDir(tempDirectories, "cli-planted-");
+      await fs.symlink(elsewhere, path.join(profileRoot, instanceId));
+    };
+    await expect(runWarm(["eval", "code=1"], [], plantSymlink)).rejects.toThrow();
   });
 
   test("dev:mobile holds the exit until the reloaded renderer reports the new mode", async () => {

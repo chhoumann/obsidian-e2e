@@ -374,7 +374,10 @@ async function runRun(
   // The read-only version guard still runs, so a mid-session update fails closed.
   let warm = false;
   if (parsed.options.reload !== true) {
+    // Validate the root, then the instance dir (parent-first), before the socket
+    // probe, marker read, or forwarded command follow any path inside it.
     await ensureSecureDir(options.profileRoot);
+    await assertSecureDirIfPresent(options.instancePath);
     warm = await isInstanceReady(options, deps.exec);
     if (warm) {
       const guardWarmInstance = deps.guardWarmInstance ?? realGuardWarmInstance;
