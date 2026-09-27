@@ -40,24 +40,36 @@ export async function runTool(
   });
 }
 
-/** Write via a sibling partial file, verify it, then rename over `output`. */
+/**
+ * Stage `output` in an exclusive, unpredictably named directory beside it
+ * (mkdtemp, mode 0700): nothing can pre-create or symlink the staged path, and
+ * the final rename stays on one filesystem. `discard()` removes the stage.
+ */
+export async function stagePartial(
+  output: string,
+): Promise<{ partial: string; discard: () => Promise<void> }> {
+  const dir = path.dirname(path.resolve(output));
+  await fs.mkdir(dir, { recursive: true });
+  const stage = await fs.mkdtemp(path.join(dir, ".obsidian-e2e-partial-"));
+  return {
+    partial: path.join(stage, path.basename(output)),
+    discard: () => fs.rm(stage, { recursive: true, force: true }),
+  };
+}
+
+/** Write via a staged partial file, verify it, then rename over `output`. */
 async function writeVerified(
   output: string,
   write: (partial: string) => Promise<void>,
 ): Promise<MediaInfo> {
-  const ext = path.extname(output);
-  const partial = path.join(
-    path.dirname(path.resolve(output)),
-    `.${path.basename(output, ext)}.partial-${process.pid}${ext}`,
-  );
-  await fs.mkdir(path.dirname(partial), { recursive: true });
+  const { partial, discard } = await stagePartial(output);
   try {
     await write(partial);
     const info = await probeMedia(partial);
     await fs.rename(partial, output);
     return info;
   } finally {
-    await fs.rm(partial, { force: true });
+    await discard();
   }
 }
 

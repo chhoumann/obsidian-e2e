@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 import type { CdpClient } from "../runner/android/cdp";
-import { probeMedia, runTool, type MediaInfo } from "./media";
+import { probeMedia, runTool, stagePartial, type MediaInfo } from "./media";
 import { evaluate, injectCss } from "./page";
 
 const CURSOR_STYLE_ID = "obsidian-e2e-capture-cursor-style";
@@ -616,11 +616,7 @@ export async function startRecording(
     async stop(stopOptions = {}) {
       if (finished) throw new Error("recording already stopped");
       finished = true;
-      const ext = path.extname(output);
-      const partial = path.join(
-        path.dirname(path.resolve(output)),
-        `.${path.basename(output, ext)}.partial-${process.pid}${ext}`,
-      );
+      let staged: Awaited<ReturnType<typeof stagePartial>> | undefined;
       try {
         const source = await capture.finish(stopOptions.signal);
         clearInterval(monitor);
@@ -668,13 +664,13 @@ export async function startRecording(
           }
         }
         await removeCursor();
-        await fs.mkdir(path.dirname(path.resolve(output)), { recursive: true });
+        staged = await stagePartial(output);
         await runTool(
           "ffmpeg",
-          ["-v", "error", "-y", ...source.inputArgs, ...encoderArgs(output, fps), partial],
+          ["-v", "error", "-y", ...source.inputArgs, ...encoderArgs(output, fps), staged.partial],
           stopOptions.signal,
         );
-        const info = await probeMedia(partial);
+        const info = await probeMedia(staged.partial);
         const wallSeconds = source.stopSeconds - source.startSeconds;
         if (
           info.durationSeconds === undefined ||
@@ -685,7 +681,7 @@ export async function startRecording(
           );
         }
         if (stopOptions.signal?.aborted) throw new Error("recording cancelled");
-        await fs.rename(partial, output);
+        await fs.rename(staged.partial, output);
         return {
           ...info,
           path: path.resolve(output),
@@ -698,9 +694,9 @@ export async function startRecording(
         clearInterval(monitor);
         await capture.abort().catch(() => {});
         await removeCursor();
-        await fs.rm(partial, { force: true }).catch(() => {});
         throw error;
       } finally {
+        await staged?.discard().catch(() => {});
         await removeDir().catch(() => {});
       }
     },
