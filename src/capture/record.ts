@@ -468,12 +468,17 @@ async function startX11Capture(
       child.kill("SIGKILL");
       await exited;
     },
-    async finish() {
+    async finish(signal) {
       const stopSeconds = Date.now() / 1000;
       child.stdin.end("q");
-      const timer = setTimeout(() => child.kill("SIGKILL"), 10_000);
+      const kill = () => child.kill("SIGKILL");
+      const timer = setTimeout(kill, 10_000);
+      if (signal?.aborted) kill();
+      signal?.addEventListener("abort", kill, { once: true });
       const code = await exited;
       clearTimeout(timer);
+      signal?.removeEventListener("abort", kill);
+      if (signal?.aborted) throw new Error("recording cancelled");
       if (code !== 0) {
         throw new Error(
           `x11grab failed (exit ${code}): ${stderr.trim() || "the grab process died during the take"}`,
