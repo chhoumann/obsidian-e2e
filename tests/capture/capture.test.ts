@@ -98,6 +98,15 @@ describe("capture args", () => {
     );
   });
 
+  test("`--` escapes dash-leading positional text outside launch/record", async () => {
+    // Usage validation passes (1 positional), then fails only on the missing CDP endpoint.
+    await expect(
+      runCaptureCli(["type", "--port", "1", "--timeout", "1", "--", "--foo"], {
+        stdout: () => {},
+      }),
+    ).rejects.toThrow(/did not become ready/);
+  });
+
   test("help and unknown subcommand", async () => {
     const out: string[] = [];
     expect(await runCaptureCli(["--help"], { stdout: (t) => out.push(t) })).toBe(0);

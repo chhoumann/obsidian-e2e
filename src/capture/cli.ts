@@ -168,7 +168,13 @@ export async function runCaptureCli(
     out(`${CAPTURE_HELP}\n`);
     return 0;
   }
-  const { flags, positionals } = args;
+  const { flags } = args;
+  // Only launch/record run a child command; elsewhere `--` just escapes
+  // positional text that starts with dashes (e.g. `capture type -- --foo`).
+  const positionals =
+    sub === "launch" || sub === "record"
+      ? args.positionals
+      : [...args.positionals, ...args.command];
   const json = (value: unknown) => out(`${JSON.stringify(value, null, 2)}\n`);
   const need = (count: number, usage: string) => {
     if (positionals.length !== count) throw new Error(`Usage: obsidian-e2e capture ${usage}`);

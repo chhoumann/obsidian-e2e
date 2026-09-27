@@ -465,9 +465,18 @@ export async function startRecording(
       await injectCss(client, CURSOR_STYLE_ID, CURSOR_CSS);
       await evaluate(client, CURSOR_SCRIPT);
     }
-    capture = x11
-      ? await startX11Capture(x11, dir, fps)
-      : await startScreencastCapture(client, dir, options.quality ?? 90, fps);
+    capture = await (async () => {
+      if (x11) {
+        try {
+          return await startX11Capture(x11, dir, fps);
+        } catch (error) {
+          if (requested === "x11") throw error;
+          backend = "screencast";
+          backendNote = `x11 failed to start (${(error as Error).message}); used screencast`;
+        }
+      }
+      return startScreencastCapture(client, dir, options.quality ?? 90, fps);
+    })();
   } catch (error) {
     await removeCursor();
     await removeDir();
