@@ -441,7 +441,7 @@ describe("capture record", () => {
       signal: controller.signal,
     });
     setTimeout(() => controller.abort(), 20);
-    await expect(starting).rejects.toThrow(/setup cancelled/);
+    await expect(starting).rejects.toThrow(/recording (setup )?cancelled/);
     const leftovers = (await fs.readdir(os.tmpdir())).filter(
       (name) => name.startsWith("obsidian-e2e-rec-") && !before.has(name),
     );
@@ -453,7 +453,7 @@ describe("capture record", () => {
     const controller = new AbortController();
     const starting = startRecording(fake.client, "/tmp/never.webm", { signal: controller.signal });
     setTimeout(() => controller.abort(), 20);
-    await expect(starting).rejects.toThrow(/setup cancelled/);
+    await expect(starting).rejects.toThrow(/recording (setup )?cancelled/);
   });
 
   test("only webm/mp4 outputs are accepted", () => {

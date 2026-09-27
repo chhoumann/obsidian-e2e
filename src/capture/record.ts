@@ -192,9 +192,9 @@ async function sleep(ms: number): Promise<void> {
 /** Reject as soon as `signal` aborts (the step itself is left to settle). */
 function abortable<T>(step: Promise<T>, signal?: AbortSignal): Promise<T> {
   if (!signal) return step;
-  if (signal.aborted) return Promise.reject(new Error("recording setup cancelled"));
+  if (signal.aborted) return Promise.reject(new Error("recording cancelled"));
   return new Promise<T>((resolve, reject) => {
-    const onAbort = () => reject(new Error("recording setup cancelled"));
+    const onAbort = () => reject(new Error("recording cancelled"));
     signal.addEventListener("abort", onAbort, { once: true });
     step.then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort));
   });
@@ -598,7 +598,7 @@ export async function startRecording(
         const source = await capture.finish();
         clearInterval(monitor);
         // A poll already running when the take ended still counts (bounded).
-        if (inFlightPoll) await withinCleanupTimeout(inFlightPoll);
+        if (inFlightPoll) await abortable(withinCleanupTimeout(inFlightPoll), stopOptions.signal);
         if (stopOptions.signal?.aborted) throw new Error("recording cancelled");
         if (x11Problem) {
           throw new Error(
@@ -613,7 +613,17 @@ export async function startRecording(
           // briefly so a page mid-reload is not mistaken for a bad take.
           let after: X11Target | { reason: string } | undefined;
           for (let attempt = 0; attempt < 5 && !after; attempt += 1) {
-            after = await detectX11Target(client).catch(() => undefined);
+            // Bounded per attempt and cancellable via the stop signal.
+            let attemptTimer: ReturnType<typeof setTimeout> | undefined;
+            after = await abortable(
+              Promise.race([
+                detectX11Target(client).catch(() => undefined),
+                new Promise<undefined>((resolve) => {
+                  attemptTimer = setTimeout(() => resolve(undefined), CLEANUP_TIMEOUT_MS);
+                }),
+              ]).finally(() => clearTimeout(attemptTimer)),
+              stopOptions.signal,
+            );
             if (!after) await sleep(300);
           }
           if (!after || "reason" in after) {
