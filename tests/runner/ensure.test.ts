@@ -1,7 +1,11 @@
 import { describe, expect, test } from "vite-plus/test";
 
 import { resolveRunnerConfig } from "../../src/runner/config";
-import { ensureObsidianInstance, type EnsureDependencies } from "../../src/runner/ensure";
+import {
+  ensureObsidianInstance,
+  type EnsureDependencies,
+  guardWarmInstance,
+} from "../../src/runner/ensure";
 import type { InstanceMarker, InstanceOptions, ResolvedRunnerConfig } from "../../src/runner/types";
 
 const CONFIG: ResolvedRunnerConfig = resolveRunnerConfig({ pluginId: "quickadd" });
@@ -274,5 +278,41 @@ describe("ensureObsidianInstance", () => {
     expect(rec.calls).not.toContain("assertObsidianMeetsMinAppVersion");
     expect(result.reused).toBe(true);
     expect(result.minAppVersion).toBeNull();
+  });
+});
+
+describe("guardWarmInstance", () => {
+  function markerAt(appVersion: string | null): InstanceMarker {
+    const options = makeOptions();
+    return {
+      appVersion,
+      vaultName: options.vaultName,
+      vaultPath: options.vaultPath,
+      worktreePath: options.worktreePath,
+    };
+  }
+
+  test("is read-only: only reads the marker and resolves the app version", async () => {
+    const { deps, rec } = makeDeps({ marker: markerAt("1.13.0"), ready: true });
+    await guardWarmInstance(makeOptions(), deps);
+    expect(rec.calls).toEqual(["readInstanceMarker", "assertObsidianMeetsMinAppVersion"]);
+    expect(rec.logs).toEqual([]);
+  });
+
+  test("a mid-session update fails closed with the stop hint", async () => {
+    const { deps } = makeDeps({ marker: markerAt("1.12.0"), ready: true, guardVersion: "1.13.0" });
+    await expect(guardWarmInstance(makeOptions(), deps)).rejects.toThrow(/stop:e2e-obsidian/);
+  });
+
+  test("warns when the instance has no recorded app version", async () => {
+    const { deps, rec } = makeDeps({ marker: markerAt(null), ready: true });
+    await guardWarmInstance(makeOptions(), deps);
+    expect(rec.logs.some((line) => /no recorded app version/.test(line))).toBe(true);
+  });
+
+  test("skipVersionGuard skips every check", async () => {
+    const { deps, rec } = makeDeps({ marker: markerAt("1.12.0"), ready: true });
+    await guardWarmInstance(makeOptions({ skipVersionGuard: true }), deps);
+    expect(rec.calls).toEqual([]);
   });
 });

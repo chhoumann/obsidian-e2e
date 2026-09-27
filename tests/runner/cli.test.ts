@@ -201,6 +201,78 @@ describe("run command forwarding", () => {
   });
 });
 
+describe("run against a warm instance", () => {
+  async function runWarm(argv: string[], evalReplies: string[] = []) {
+    const worktree = await createTempDir(tempDirectories, "cli-run-warm-");
+    const profileRoot = await createTempDir(tempDirectories, "cli-profile-");
+    const cliCalls: string[][] = [];
+    let ensured = 0;
+    let guarded = 0;
+    let forwarded: string[] = [];
+    const code = await runObsidianE2ECli(
+      ["run", "--worktree", worktree, "--profile-root", profileRoot, ...argv],
+      {
+        cwd: worktree,
+        stdout: () => {},
+        stderr: () => {},
+        loadRunnerConfig: configLoader({ pluginId: "quickadd" }),
+        ensureObsidianInstance: async (options, config) => {
+          ensured += 1;
+          return stubEnsure(options, config);
+        },
+        guardWarmInstance: async () => {
+          guarded += 1;
+        },
+        reapOrphanedInstances: async () => ({ scanned: 0, reaped: [] }),
+        // The live socket answers `vault info=path` with this worktree's vault.
+        exec: {
+          socketExists: async () => true,
+          sleep: async () => {},
+          execFile: async (_file, args) => {
+            cliCalls.push([...args]);
+            if (args[1] === "eval") return { stdout: evalReplies.shift() ?? "", stderr: "" };
+            const vaultArg = args[0] ?? "";
+            const vaultName = vaultArg.slice("vault=".length);
+            return { stdout: path.join(worktree, ".obsidian-e2e-vaults", vaultName), stderr: "" };
+          },
+        },
+        spawn: makeSpawn({ code: 0, signal: null }, (_file, args) => {
+          forwarded = args.slice(1);
+        }),
+      },
+    );
+    return { code, cliCalls, ensured, guarded, forwarded };
+  }
+
+  test("checks the vault identity and forwards without reloading or re-verifying", async () => {
+    const result = await runWarm(["eval", "code=1"]);
+    expect(result.code).toBe(0);
+    expect(result.ensured).toBe(0);
+    expect(result.guarded).toBe(1);
+    expect(result.cliCalls.map((args) => args.slice(1))).toEqual([["vault", "info=path"]]);
+    expect(result.forwarded).toEqual(["eval", "code=1"]);
+  });
+
+  test("dev:mobile holds the exit until the reloaded renderer reports the new mode", async () => {
+    const result = await runWarm(
+      ["dev:mobile", "on"],
+      ['Error: Command "eval" not found.', "=> false", "=> true"],
+    );
+    expect(result.code).toBe(0);
+    expect(result.forwarded).toEqual(["dev:mobile", "on"]);
+    const probes = result.cliCalls.filter((args) => args[1] === "eval");
+    expect(probes).toHaveLength(3);
+    expect(probes[0]?.[2]).toBe("code=app.isMobile === true && app.workspace.layoutReady");
+  });
+
+  test("--reload redeploys through the full bring-up first", async () => {
+    const result = await runWarm(["--reload", "eval", "code=1"]);
+    expect(result.ensured).toBe(1);
+    expect(result.guarded).toBe(0);
+    expect(result.forwarded).toEqual(["eval", "code=1"]);
+  });
+});
+
 describe("spawnObsidian", () => {
   const options = {
     obsidianBin: "obsidian",

@@ -151,25 +151,13 @@ export async function ensureObsidianInstance(
 
   let reused = false;
   if (await isInstanceReady(readyTarget, exec)) {
-    // A warm instance is only safe to reuse when it runs the app version we just
-    // resolved; a mid-session Obsidian update means the running renderer no longer
-    // matches, so fail closed and make the operator restart it.
     if (!options.skipVersionGuard) {
-      const recorded = previousMarker?.appVersion ?? null;
-      if (recorded && recorded !== resolvedAppVersion) {
-        throw new Error(
-          `Refusing to reuse the warm Obsidian instance for ${options.vaultName}: it was launched ` +
-            `against app version ${recorded}, but the resolved app version is now ${resolvedAppVersion}. ` +
-            `Obsidian updated mid-session. Stop the stale instance and let the next run relaunch it: ` +
-            `npm run stop:e2e-obsidian`,
-        );
-      }
-      if (!recorded) {
-        log(
-          `Reusing a warm Obsidian instance with no recorded app version; a mid-session Obsidian ` +
-            `update cannot be detected for this instance until it is relaunched.`,
-        );
-      }
+      assertWarmInstanceAppVersion(
+        options.vaultName,
+        previousMarker?.appVersion ?? null,
+        resolvedAppVersion,
+        log,
+      );
     }
     // Reload BEFORE verify so a rebuilt main.js of the same app version takes
     // effect instead of the bundle the warm instance loaded earlier.
@@ -197,4 +185,67 @@ export async function ensureObsidianInstance(
     appVersion: resolvedAppVersion,
     minAppVersion,
   };
+}
+
+/**
+ * A warm instance is only safe to reuse when it runs the app version we just
+ * resolved; a mid-session Obsidian update means the running renderer no longer
+ * matches, so fail closed and make the operator restart it.
+ */
+function assertWarmInstanceAppVersion(
+  vaultName: string,
+  recorded: string | null,
+  resolved: string | null,
+  log: (message: string) => void,
+): void {
+  if (recorded && recorded !== resolved) {
+    throw new Error(
+      `Refusing to reuse the warm Obsidian instance for ${vaultName}: it was launched ` +
+        `against app version ${recorded}, but the resolved app version is now ${resolved}. ` +
+        `Obsidian updated mid-session. Stop the stale instance and let the next run relaunch it: ` +
+        `npm run stop:e2e-obsidian`,
+    );
+  }
+  if (!recorded) {
+    log(
+      `Reusing a warm Obsidian instance with no recorded app version; a mid-session Obsidian ` +
+        `update cannot be detected for this instance until it is relaunched.`,
+    );
+  }
+}
+
+/**
+ * The version guard for attaching to a warm instance without the full bring-up:
+ * the same minAppVersion check and mid-session-update comparison as
+ * {@link ensureObsidianInstance}, but read-only (no provisioning, profile writes,
+ * or success logging), so non-mutating inspection keeps the mismatch protection.
+ */
+export async function guardWarmInstance(
+  options: InstanceOptions,
+  deps: Pick<
+    EnsureDependencies,
+    | "readInstanceMarker"
+    | "assertObsidianMeetsMinAppVersion"
+    | "log"
+    | "obsidianConfigDir"
+    | "bundledAsarCandidates"
+  > = {},
+): Promise<void> {
+  if (options.skipVersionGuard) return;
+  const readInstanceMarker = deps.readInstanceMarker ?? realReadInstanceMarker;
+  const assertObsidianMeetsMinAppVersion =
+    deps.assertObsidianMeetsMinAppVersion ?? realAssertObsidianMeetsMinAppVersion;
+  const marker = await readInstanceMarker(options.instancePath);
+  const guard = await assertObsidianMeetsMinAppVersion({
+    worktreePath: options.worktreePath,
+    obsidianApp: options.obsidianApp,
+    obsidianConfigDir: deps.obsidianConfigDir,
+    bundledAsarCandidates: deps.bundledAsarCandidates,
+  });
+  assertWarmInstanceAppVersion(
+    options.vaultName,
+    marker?.appVersion ?? null,
+    guard.appVersion,
+    deps.log ?? (() => {}),
+  );
 }

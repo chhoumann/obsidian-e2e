@@ -254,8 +254,64 @@ export async function reloadPlugin(
 }
 
 /**
+ * Poll until the renderer reports the requested mobile-emulation state with its
+ * layout ready. `dev:mobile on|off` replies "Reloading..." before the renderer
+ * reloads, so the next command would otherwise hit the old renderer or one that
+ * has not registered its CLI handlers yet (answered with a "not found" error and
+ * exit 0). A no-op toggle does not reload and resolves on the first probe.
+ */
+export async function waitForMobileEmulation(
+  target: VaultExecTarget,
+  enabled: boolean,
+  deps?: ObsidianExecDependencies,
+): Promise<void> {
+  await waitForRenderer(
+    target,
+    `app.isMobile === ${enabled} && app.workspace.layoutReady`,
+    `Mobile emulation did not settle ${enabled ? "on" : "off"}`,
+    deps,
+  );
+}
+
+/**
+ * Poll an `eval` condition until it is `true`. Used after commands that reload
+ * the renderer after replying, so the caller only continues on a renderer that
+ * has finished loading.
+ */
+async function waitForRenderer(
+  target: VaultExecTarget,
+  condition: string,
+  failure: string,
+  deps?: ObsidianExecDependencies,
+): Promise<void> {
+  const now = resolveNow(deps);
+  const sleep = resolveSleep(deps);
+  const deadline = now() + (deps?.timeoutMs ?? DEFAULT_READY_TIMEOUT_MS);
+  // A renderer reload takes a few hundred ms, so poll finer than launch readiness.
+  const intervalMs = deps?.intervalMs ?? 100;
+  const probeArgs = [`vault=${target.vaultName}`, "eval", `code=${condition}`];
+  let lastOutput = "";
+  while (now() < deadline) {
+    try {
+      const { stdout } = await execObsidian(target, probeArgs, deps, {
+        timeout: READY_PROBE_TIMEOUT_MS,
+      });
+      if (stdout.trim() === "=> true") return;
+      lastOutput = stdout.trim();
+    } catch (error) {
+      lastOutput = commandErrorMessage(error);
+    }
+    await sleep(intervalMs);
+  }
+  throw new Error(`${failure} in ${target.vaultName}. Last probe: ${lastOutput}`);
+}
+
+/**
  * Disable Restricted Mode, then poll the configured readiness probe until its
- * output contains `probe.match`. An `eval` probe runs `code=<probe.code>`; a
+ * output contains `probe.match`. Turning Restricted Mode off on a fresh profile
+ * replies "Reloading..." and reloads the renderer afterwards; the old renderer
+ * can already pass the probe, so first wait for a renderer created after the
+ * command. An `eval` probe runs `code=<probe.code>`; a
  * `command` probe forwards `probe.args` verbatim. The probe code/args never embed
  * the match sentinel, so an echoed command can't be mistaken for a positive.
  */
@@ -264,7 +320,20 @@ export async function trustVaultAndVerifyPlugin(
   readyProbe: ReadyProbe,
   deps?: ObsidianExecDependencies,
 ): Promise<boolean> {
-  await execObsidian(target, [`vault=${target.vaultName}`, "plugins:restrict", "off"], deps);
+  const restrictSentAt = Date.now();
+  const restrict = await execObsidian(
+    target,
+    [`vault=${target.vaultName}`, "plugins:restrict", "off"],
+    deps,
+  );
+  if (/Reloading/i.test(restrict.stdout)) {
+    await waitForRenderer(
+      target,
+      `performance.timeOrigin > ${restrictSentAt} && app.workspace.layoutReady`,
+      "Obsidian did not finish reloading after disabling Restricted Mode",
+      deps,
+    );
+  }
 
   const now = resolveNow(deps);
   const sleep = resolveSleep(deps);
