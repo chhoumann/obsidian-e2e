@@ -10,7 +10,13 @@ import {
   prepareCaptureProfile,
   resolveCaptureProfile,
 } from "../../src/capture/launch";
-import { captureScreenshot, connectCapture, pngSize, typeText } from "../../src/capture/page";
+import {
+  captureScreenshot,
+  connectCapture,
+  pngSize,
+  prepareCapture,
+  typeText,
+} from "../../src/capture/page";
 import { buildConcatList, encoderArgs, startRecording } from "../../src/capture/record";
 import { CdpClient, type CdpSocket } from "../../src/runner/android/cdp";
 import { cleanupTempDirectories, createTempDir } from "../helpers/create-temp-dir";
@@ -310,6 +316,21 @@ describe("capture connect deadline", () => {
       }),
     ).rejects.toThrow(/did not become ready: timed out/);
     expect(Date.now() - started).toBeLessThan(2000);
+  });
+});
+
+describe("capture prepare", () => {
+  test("a size-only prepare leaves the capture CSS alone; an explicit false rewrites it", async () => {
+    const state = { width: 1280, height: 800, devicePixelRatio: 2, theme: "light" };
+    const fake = await fakeClient((_m, params) =>
+      value(expr(params).includes("const out = { width: innerWidth") ? state : true),
+    );
+    const touchesStyle = () =>
+      fake.sent.some((m) => expr(m.params).includes("obsidian-e2e-capture-style"));
+    await prepareCapture(fake.client, { width: 1280, height: 800 });
+    expect(touchesStyle()).toBe(false);
+    await prepareCapture(fake.client, { hideSecretWarning: false });
+    expect(touchesStyle()).toBe(true);
   });
 });
 

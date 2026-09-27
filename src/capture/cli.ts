@@ -227,7 +227,8 @@ export async function runCaptureCli(
             theme,
             font: str(flags, "font"),
             css: str(flags, "css"),
-            hideSecretWarning: flags["hide-secret-warning"] === true,
+            // Omitted flag = leave existing capture CSS alone (size-only prepare).
+            hideSecretWarning: flags["hide-secret-warning"] === true ? true : undefined,
           }),
         );
       } finally {
