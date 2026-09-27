@@ -509,15 +509,26 @@ export async function startRecording(
       try {
         const source = await capture.finish();
         if (x11 && backend === "x11") {
-          // x11grab records a fixed screen region: a window moved or resized
-          // mid-take (e.g. a prepare in the driver) would silently record the
-          // wrong pixels, so refuse such a take.
-          const after = await detectX11Target(client).catch(() => undefined);
-          const region = after && "region" in after ? after.region : undefined;
-          if (region && JSON.stringify(region) !== JSON.stringify(x11.region)) {
+          // x11grab records a fixed screen region, so a window that moved,
+          // resized, or became minimized/hidden/off-screen/overlapped during the
+          // take would leave wrong pixels in the video: refuse such takes. Retry
+          // briefly so a page mid-reload is not mistaken for a bad take.
+          let after: X11Target | { reason: string } | undefined;
+          for (let attempt = 0; attempt < 5 && !after; attempt += 1) {
+            after = await detectX11Target(client).catch(() => undefined);
+            if (!after) await sleep(300);
+          }
+          if (!after || "reason" in after) {
+            throw new Error(
+              `Cannot confirm the window stayed capturable for the whole x11 take: ${
+                after ? after.reason : "renderer did not answer"
+              }; use --backend screencast`,
+            );
+          }
+          if (JSON.stringify(after.region) !== JSON.stringify(x11.region)) {
             throw new Error(
               `The window moved or resized during an x11 take (${JSON.stringify(x11.region)} -> ` +
-                `${JSON.stringify(region)}); keep its geometry fixed or use --backend screencast`,
+                `${JSON.stringify(after.region)}); keep its geometry fixed or use --backend screencast`,
             );
           }
         }

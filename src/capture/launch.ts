@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 
@@ -167,22 +168,49 @@ export async function runCaptureInstance(
   command: CaptureLaunchCommand,
   log: (line: string) => void = (line) => process.stderr.write(`${line}\n`),
 ): Promise<number> {
-  const child = spawn(command.file, command.args, { env: command.env, stdio: "inherit" });
-  const forward = (signal: NodeJS.Signals) => () => child.kill(signal);
+  // Own process group: xvfb-run -> Xvfb + Obsidian (+ helpers). Signalling only
+  // the wrapper orphaned Obsidian and Xvfb (still holding the CDP port).
+  const group = process.platform !== "win32";
+  const child = spawn(command.file, command.args, {
+    env: command.env,
+    stdio: "inherit",
+    detached: group,
+  });
+  const signalTree = (signal: NodeJS.Signals) => {
+    try {
+      if (group && child.pid !== undefined) process.kill(-child.pid, signal);
+      else child.kill(signal);
+    } catch {
+      // already gone
+    }
+  };
+  let received: NodeJS.Signals | undefined;
+  const forward = (signal: NodeJS.Signals) => () => {
+    received ??= signal;
+    signalTree(signal);
+    setTimeout(() => signalTree("SIGKILL"), 5000).unref();
+  };
   const onInt = forward("SIGINT");
   const onTerm = forward("SIGTERM");
+  const onHup = forward("SIGHUP");
   process.on("SIGINT", onInt);
   process.on("SIGTERM", onTerm);
+  process.on("SIGHUP", onHup);
   try {
     return await new Promise<number>((resolve) => {
       child.on("error", (error) => {
         log(`Failed to launch ${command.file}: ${error.message}`);
         resolve(1);
       });
-      child.on("close", (code, signal) => resolve(signal ? 1 : (code ?? 1)));
+      child.on("close", (code, signal) => {
+        const stoppedBy = received ?? signal;
+        resolve(stoppedBy ? 128 + (os.constants.signals[stoppedBy] ?? 15) : (code ?? 1));
+      });
     });
   } finally {
+    signalTree("SIGKILL"); // stragglers (Xvfb, Obsidian helpers) once the wrapper is gone
     process.off("SIGINT", onInt);
     process.off("SIGTERM", onTerm);
+    process.off("SIGHUP", onHup);
   }
 }
