@@ -352,6 +352,8 @@ async function startX11Capture(target: X11Target, dir: string, fps: number): Pro
   const firstFrame = new Promise<void>((resolve) => {
     onFirstFrame = resolve;
   });
+  // ffmpeg may already be gone at stop time; a failed "q" write must not crash us.
+  child.stdin.on("error", () => {});
   child.stderr.on("data", (chunk: Buffer) => {
     stderr = (stderr + chunk.toString()).slice(-4000);
   });
@@ -400,7 +402,11 @@ async function startX11Capture(target: X11Target, dir: string, fps: number): Pro
       const timer = setTimeout(() => child.kill("SIGKILL"), 10_000);
       const code = await exited;
       clearTimeout(timer);
-      if (code !== 0) throw new Error(`x11grab failed (${code}): ${stderr.trim()}`);
+      if (code !== 0) {
+        throw new Error(
+          `x11grab failed (exit ${code}): ${stderr.trim() || "the grab process died during the take"}`,
+        );
+      }
       return {
         inputArgs: ["-i", file],
         startSeconds: firstFrameAt!,
@@ -502,6 +508,19 @@ export async function startRecording(
       );
       try {
         const source = await capture.finish();
+        if (x11 && backend === "x11") {
+          // x11grab records a fixed screen region: a window moved or resized
+          // mid-take (e.g. a prepare in the driver) would silently record the
+          // wrong pixels, so refuse such a take.
+          const after = await detectX11Target(client).catch(() => undefined);
+          const region = after && "region" in after ? after.region : undefined;
+          if (region && JSON.stringify(region) !== JSON.stringify(x11.region)) {
+            throw new Error(
+              `The window moved or resized during an x11 take (${JSON.stringify(x11.region)} -> ` +
+                `${JSON.stringify(region)}); keep its geometry fixed or use --backend screencast`,
+            );
+          }
+        }
         await removeCursor();
         await fs.mkdir(path.dirname(path.resolve(output)), { recursive: true });
         await runTool(
