@@ -431,6 +431,15 @@ describe("CdpClient extensions", () => {
     await expect(fake.client.call("Good.method")).rejects.toThrow(/socket closed/);
   });
 
+  test("close() fails a call whose reply never arrives", async () => {
+    const fake = await fakeClient((method) =>
+      method === "Hang.forever" ? { id: -1 } : { result: {} },
+    );
+    const pending = fake.client.call("Hang.forever");
+    fake.client.close();
+    await expect(pending).rejects.toThrow(/socket closed/);
+  });
+
   test("a custom target selector with no match reports it generically", async () => {
     await expect(
       CdpClient.connect(9333, {

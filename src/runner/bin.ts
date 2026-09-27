@@ -14,6 +14,9 @@ import { runObsidianE2ECli } from "./cli";
 runObsidianE2ECli(process.argv.slice(2))
   .then((code) => {
     process.exitCode = code;
+    // A signal-cancelled run (128+n) must not linger on a socket whose peer is
+    // unresponsive (e.g. a WebSocket close handshake to a frozen app).
+    if (code >= 128) setTimeout(() => process.exit(code), 2000).unref();
   })
   .catch((error: unknown) => {
     process.exitCode = 1;

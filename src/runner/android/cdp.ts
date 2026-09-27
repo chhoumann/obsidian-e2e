@@ -208,8 +208,13 @@ export class CdpClient {
     return () => set.delete(listener);
   }
 
+  /** Close the socket; pending calls fail immediately rather than waiting on it. */
   close(): void {
     this.closed = true;
+    for (const resolve of this.pending.values()) {
+      resolve({ error: { message: "CDP socket closed" } });
+    }
+    this.pending.clear();
     this.socket.close();
   }
 }

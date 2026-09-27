@@ -346,16 +346,22 @@ async function recordAroundCommand(
   // everything (including temp-frame cleanup) is done.
   let received: NodeJS.Signals | undefined;
   const cancel = new AbortController();
+  let stopping = false;
   const onSignal = (signal: NodeJS.Signals) => () => {
     received ??= signal;
     cancel.abort();
+    // While finalizing, a hung CDP reply must not block cleanup: closing the
+    // client fails any pending call immediately.
+    if (stopping) client.close();
     killTree(signal);
     setTimeout(() => killTree("SIGKILL"), KILL_GRACE_MS).unref();
   };
   const onInt = onSignal("SIGINT");
   const onTerm = onSignal("SIGTERM");
+  const onHup = onSignal("SIGHUP");
   process.on("SIGINT", onInt);
   process.on("SIGTERM", onTerm);
+  process.on("SIGHUP", onHup);
   // Read through a function: the signal handler mutates `received`, which
   // control-flow narrowing cannot see after the early-return checks.
   const cancelledBy = (): NodeJS.Signals | undefined => received;
@@ -430,12 +436,13 @@ async function recordAroundCommand(
     }
     const current = recording;
     recording = undefined;
+    stopping = true;
     try {
       json(await current.stop({ signal: cancel.signal }));
     } catch (error) {
       const signal = cancelledBy();
       if (!signal) throw error;
-      err(`capture record: cancelled by ${signal} while encoding; recording discarded\n`);
+      err(`capture record: cancelled by ${signal} while finalizing; recording discarded\n`);
       return signalStatus(signal);
     }
     return 0;
@@ -443,6 +450,7 @@ async function recordAroundCommand(
     await recording?.abort();
     process.off("SIGINT", onInt);
     process.off("SIGTERM", onTerm);
+    process.off("SIGHUP", onHup);
     client.close();
   }
 }

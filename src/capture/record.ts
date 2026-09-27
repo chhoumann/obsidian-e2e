@@ -508,6 +508,7 @@ export async function startRecording(
       );
       try {
         const source = await capture.finish();
+        if (stopOptions.signal?.aborted) throw new Error("recording cancelled");
         if (x11 && backend === "x11") {
           // x11grab records a fixed screen region, so a window that moved,
           // resized, or became minimized/hidden/off-screen/overlapped during the
