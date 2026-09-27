@@ -22,7 +22,9 @@ export interface CdpTargetInfo {
  */
 export interface CdpDependencies {
   fetchJson?: (url: string) => Promise<unknown>;
-  connect?: (url: string) => Promise<CdpSocket>;
+  connect?: (url: string, signal?: AbortSignal) => Promise<CdpSocket>;
+  /** Abort a pending connection (closes a half-open WebSocket handshake). */
+  signal?: AbortSignal;
   /** Pick the page target; defaults to the first debuggable page. */
   selectTarget?: (targets: CdpTargetInfo[]) => CdpTargetInfo | undefined;
 }
@@ -48,7 +50,7 @@ const defaultFetchJson = async (url: string): Promise<unknown> => {
   return (await response.json()) as unknown;
 };
 
-const defaultConnect = async (url: string): Promise<CdpSocket> => {
+const defaultConnect = async (url: string, signal?: AbortSignal): Promise<CdpSocket> => {
   if (typeof WebSocket === "undefined") {
     throw new Error(
       "The android runner needs the global WebSocket client (Node 22+). Upgrade Node to use it.",
@@ -59,6 +61,14 @@ const defaultConnect = async (url: string): Promise<CdpSocket> => {
     ws.onopen = () => resolve();
     ws.onerror = () =>
       reject(new Error(`Cannot connect to the webview devtools socket at ${url}.`));
+    signal?.addEventListener(
+      "abort",
+      () => {
+        ws.close();
+        reject(new Error(`Connection to ${url} aborted.`));
+      },
+      { once: true },
+    );
   });
   return {
     send: (data) => ws.send(data),
@@ -124,7 +134,7 @@ export class CdpClient {
           `and the port forwarded to its webview devtools socket?`,
       );
     }
-    return new CdpClient(await connect(page.webSocketDebuggerUrl));
+    return new CdpClient(await connect(page.webSocketDebuggerUrl, deps.signal));
   }
 
   private send(method: string, params: Record<string, unknown>): Promise<Record<string, unknown>> {

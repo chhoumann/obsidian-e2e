@@ -294,6 +294,25 @@ describe("capture connect", () => {
   });
 });
 
+describe("capture connect deadline", () => {
+  test("a WebSocket handshake that never settles still honours the timeout", async () => {
+    const started = Date.now();
+    await expect(
+      connectCapture({
+        timeoutMs: 300,
+        deps: {
+          fetchJson: () =>
+            Promise.resolve([
+              { type: "page", url: "app://obsidian.md/index.html", webSocketDebuggerUrl: "ws://x" },
+            ]),
+          connect: () => new Promise<CdpSocket>(() => {}),
+        },
+      }),
+    ).rejects.toThrow(/did not become ready: timed out/);
+    expect(Date.now() - started).toBeLessThan(2000);
+  });
+});
+
 describe("capture type", () => {
   test("maps in-page outcomes to errors", async () => {
     const cases = [

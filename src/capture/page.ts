@@ -73,19 +73,45 @@ export async function connectCapture(options: ConnectOptions = {}): Promise<CdpC
     options.deps?.fetchJson ??
     (async (url: string) => (await fetch(url)).json() as Promise<unknown>);
   let lastError = "not attempted";
+  // Every step (HTTP, WebSocket handshake, evaluate) is bounded by the deadline;
+  // a client that connects after its attempt timed out is closed, not leaked.
+  const bounded = <T>(
+    step: Promise<T>,
+    onLate?: (value: T) => void,
+    abort?: AbortController,
+  ): Promise<T> => {
+    const remaining = Math.max(0, deadline - Date.now());
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        abort?.abort();
+        void step.then((value) => onLate?.(value)).catch(() => {});
+        reject(new Error(`timed out after ${options.timeoutMs ?? 30_000} ms`));
+      }, remaining);
+    });
+    return Promise.race([step, timeout]).finally(() => clearTimeout(timer));
+  };
   while (true) {
     let client: CdpClient | undefined;
     try {
-      const targets = (await fetchJson(`http://localhost:${port}/json`)) as CdpTargetInfo[];
+      const targets = (await bounded(
+        fetchJson(`http://localhost:${port}/json`),
+      )) as CdpTargetInfo[];
       const candidates = targets.filter(matches);
       if (candidates.length === 0) lastError = `no matching page target on CDP port ${port}`;
       for (const candidate of candidates) {
-        client = await CdpClient.connect(port, {
-          ...options.deps,
-          fetchJson: () => Promise.resolve([candidate]),
-          selectTarget: (list) => list[0],
-        });
-        if (await evaluate<boolean>(client, readyExpression)) return client;
+        const handshake = new AbortController();
+        client = await bounded(
+          CdpClient.connect(port, {
+            ...options.deps,
+            fetchJson: () => Promise.resolve([candidate]),
+            selectTarget: (list) => list[0],
+            signal: handshake.signal,
+          }),
+          (late) => late.close(),
+          handshake,
+        );
+        if (await bounded(evaluate<boolean>(client, readyExpression))) return client;
         client.close();
         client = undefined;
         lastError = wanted === undefined ? "main workspace not ready" : "window still loading";
@@ -97,7 +123,7 @@ export async function connectCapture(options: ConnectOptions = {}): Promise<CdpC
     if (Date.now() >= deadline) {
       throw new Error(`Obsidian on CDP port ${port} did not become ready: ${lastError}`);
     }
-    await sleep(500);
+    await sleep(Math.min(500, Math.max(0, deadline - Date.now())));
   }
 }
 
@@ -180,7 +206,11 @@ export async function prepareCapture(
   if (options.hideSecretWarning) css.push(LINUX_SECRET_WARNING_CSS);
   if (options.css) css.push(options.css);
   // Only rewrite the capture CSS when asked to, so a size-only prepare keeps it.
-  if (options.font !== undefined || options.hideSecretWarning || options.css !== undefined) {
+  if (
+    options.font !== undefined ||
+    options.hideSecretWarning !== undefined ||
+    options.css !== undefined
+  ) {
     await injectCss(client, STYLE_ID, css.join("\n"));
   }
 

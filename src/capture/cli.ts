@@ -355,6 +355,9 @@ async function recordAroundCommand(
   const onTerm = onSignal("SIGTERM");
   process.on("SIGINT", onInt);
   process.on("SIGTERM", onTerm);
+  // Read through a function: the signal handler mutates `received`, which
+  // control-flow narrowing cannot see after the early-return checks.
+  const cancelledBy = (): NodeJS.Signals | undefined => received;
   const signalStatus = (name: NodeJS.Signals) => 128 + (os.constants.signals[name] ?? 15);
   try {
     // Setup (CDP calls, starting ffmpeg) must stay cancellable too: race it
@@ -420,7 +423,7 @@ async function recordAroundCommand(
       killTree("SIGKILL"); // stragglers of a failed/aborted driver
       await recording.abort();
       err(
-        `capture record: ${received ? `cancelled by ${received}` : timedOut ? "command timed out" : `command exited ${status}`}; recording discarded\n`,
+        `capture record: ${cancelledBy() ? `cancelled by ${cancelledBy()}` : timedOut ? "command timed out" : `command exited ${status}`}; recording discarded\n`,
       );
       return status;
     }
@@ -429,9 +432,10 @@ async function recordAroundCommand(
     try {
       json(await current.stop({ signal: cancel.signal }));
     } catch (error) {
-      if (!received) throw error;
-      err(`capture record: cancelled by ${received} while encoding; recording discarded\n`);
-      return signalStatus(received);
+      const signal = cancelledBy();
+      if (!signal) throw error;
+      err(`capture record: cancelled by ${signal} while encoding; recording discarded\n`);
+      return signalStatus(signal);
     }
     return 0;
   } finally {
