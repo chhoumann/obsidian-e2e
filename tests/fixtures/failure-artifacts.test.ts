@@ -22,6 +22,11 @@ import { createStubObsidianClient } from "../helpers/stub-obsidian-client";
 
 const tempDirectories: string[] = [];
 
+// Answers the two in-app evals behind dom.txt and the visible notices.
+function answerSnapshotEvals(body: string, visibleNotices: string[] = []) {
+  return (code: string) => (code.includes(".notice-container > .notice") ? visibleNotices : body);
+}
+
 afterEach(async () => {
   await cleanupTempDirectories(tempDirectories);
 });
@@ -58,7 +63,7 @@ describe("failure artifacts", () => {
     const obsidian = createStubObsidianClient({
       activeFile: "Inbox/Today.md",
       consoleMessages: [{ args: ["saved"], at: 1, level: "log", text: "saved" }],
-      domResult: "<div>Workspace</div>",
+      onEvalJson: answerSnapshotEvals("<body><div>Workspace</div></body>", ["Still visible"]),
       editorText: "# Today",
       notices: [{ at: 2, message: "Saved" }],
       onScreenshot: async (targetPath) => {
@@ -114,9 +119,10 @@ describe("failure artifacts", () => {
     await expect(fs.readFile(path.join(artifactRoot, "editor.json"), "utf8")).resolves.toContain(
       "# Today",
     );
-    await expect(fs.readFile(path.join(artifactRoot, "notices.json"), "utf8")).resolves.toContain(
-      '"Saved"',
-    );
+    expect(JSON.parse(await fs.readFile(path.join(artifactRoot, "notices.json"), "utf8"))).toEqual({
+      raised: [{ at: 2, message: "Saved" }],
+      visible: ["Still visible"],
+    });
     await expect(
       fs.readFile(path.join(artifactRoot, "runtime-errors.json"), "utf8"),
     ).resolves.toContain('"boom"');
@@ -137,7 +143,7 @@ describe("failure artifacts", () => {
     const obsidian = createStubObsidianClient({
       activeFile: "Inbox/Missing.md",
       consoleMessages: [{ args: ["saved"], at: 1, level: "log", text: "saved" }],
-      domResult: "<div>Workspace</div>",
+      onEvalJson: answerSnapshotEvals("<body><div>Workspace</div></body>"),
       editorText: "# Missing",
       onScreenshot: async (targetPath) => {
         await fs.writeFile(targetPath, "png", "utf8");
@@ -235,7 +241,7 @@ describe("failure artifacts", () => {
     const client = createStubObsidianClient({
       activeFile: "Inbox/Today.md",
       consoleMessages: [{ args: ["hello"], at: 1, level: "log", text: "hello" }],
-      domResult: "<div>Workspace</div>",
+      onEvalJson: answerSnapshotEvals("<body><div>Workspace</div></body>"),
       editorText: "# Today",
       notices: [{ at: 2, message: "Saved" }],
       onScreenshot: async (targetPath) => {

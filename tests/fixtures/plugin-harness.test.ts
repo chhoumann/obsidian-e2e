@@ -225,6 +225,7 @@ describe("createPluginHarness runner binding", () => {
 
     expect(bundled).toMatch(/import\s*\{[^}]*\bbeforeAll\b[^}]*\}\s*from\s*"vitest"/u);
     expect(bundled).toMatch(/import\s*\{[^}]*\btest\b[^}]*\}\s*from\s*"vitest"/u);
+    expect(bundled).toMatch(/import\s*\{[^}]*\bsetFn\b[^}]*\}\s*from\s*"vitest\/suite"/u);
     expect(bundled).not.toMatch(/function beforeAll\(/u);
     expect(bundled).not.toMatch(/from\s*"vite-plus\/test"/u);
   });

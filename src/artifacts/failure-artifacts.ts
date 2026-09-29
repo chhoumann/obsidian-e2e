@@ -56,6 +56,22 @@ const DEFAULT_FAILURE_ARTIFACT_CAPTURE: Required<FailureArtifactOptions> = {
   workspace: true,
 };
 
+// The whole body, so modals (`.modal-container`) and notices
+// (`.notice-container`) are included next to `.workspace`. Input values other
+// than passwords are copied into attributes, scripts and SVG paths are dropped,
+// and every tag starts a line, so the file stays small and greppable.
+const DOM_SNAPSHOT_CODE = `(() => {
+  const body = document.body.cloneNode(true);
+  const fields = 'input:not([type="password"]), textarea';
+  const live = document.body.querySelectorAll(fields);
+  body.querySelectorAll(fields).forEach((el, i) => el.setAttribute("value", live[i].value));
+  body.querySelectorAll("script, style").forEach((el) => el.remove());
+  body.querySelectorAll("svg").forEach((el) => el.replaceChildren());
+  return body.outerHTML.replaceAll("><", ">\\n<");
+})()`;
+
+const VISIBLE_NOTICES_CODE = `[...document.querySelectorAll(".notice-container > .notice")].map((el) => (el.querySelector(".notice-message") ?? el).textContent)`;
+
 export function getFailureArtifactConfig(
   options: FailureArtifactRegistrationOptions,
 ): FailureArtifactConfig {
@@ -128,13 +144,8 @@ export async function captureFailureArtifacts(
         frontmatter: (await unwrapArtifactInput(activeNote))?.frontmatter ?? null,
       }),
     ),
-    captureTextArtifact(artifactDirectory, "dom.txt", config.capture.dom, async () =>
-      String(
-        await obsidian.dev.dom({
-          inner: true,
-          selector: ".workspace",
-        }),
-      ),
+    captureTextArtifact(artifactDirectory, "dom.txt", config.capture.dom, () =>
+      obsidian.dev.evalJson<string>(DOM_SNAPSHOT_CODE),
     ),
     captureJsonArtifact(artifactDirectory, "editor.json", config.capture.editorText, async () => ({
       text: await obsidian.dev.editorText(),
@@ -151,12 +162,10 @@ export async function captureFailureArtifacts(
       config.capture.runtimeErrors,
       async () => diagnostics?.runtimeErrors ?? [],
     ),
-    captureJsonArtifact(
-      artifactDirectory,
-      "notices.json",
-      config.capture.notices,
-      async () => diagnostics?.notices ?? [],
-    ),
+    captureJsonArtifact(artifactDirectory, "notices.json", config.capture.notices, async () => ({
+      visible: await obsidian.dev.evalJson<string[]>(VISIBLE_NOTICES_CODE),
+      raised: diagnostics?.notices ?? [],
+    })),
     captureScreenshotArtifact(artifactDirectory, config.capture.screenshot, obsidian),
     captureJsonArtifact(artifactDirectory, "tabs.json", config.capture.tabs, () => obsidian.tabs()),
     captureJsonArtifact(artifactDirectory, "workspace.json", config.capture.workspace, () =>
