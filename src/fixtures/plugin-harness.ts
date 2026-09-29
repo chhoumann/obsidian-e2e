@@ -19,6 +19,7 @@ import type {
   SandboxApi,
 } from "../core/types";
 import { verifyVaultPath } from "../env/resolve-env";
+import { captureOnTestFailure } from "./failure-artifacts";
 import { createInternalTestContext } from "./test-context";
 import type { CreateObsidianTestOptions, TestContext } from "./types";
 
@@ -96,11 +97,7 @@ export function createPluginHarness(
     beforeAll(() => session.setup(), setupTimeoutMs);
 
     beforeEach((ctx: VitestTestContext) => {
-      ctx.onTestFailed(async () => {
-        await session.captureFailure({ id: ctx.task.id, name: ctx.task.name }).catch((error) => {
-          console.warn(`Plugin "${options.pluginId}" harness artifact capture failed`, error);
-        });
-      });
+      captureOnTestFailure(ctx, () => session.captureFailure(ctx.task));
     });
 
     beforeEach(() => session.resetDiagnostics());

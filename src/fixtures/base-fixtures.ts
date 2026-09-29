@@ -80,18 +80,9 @@ export function createBaseFixtures(
       { scope: "worker" },
     ],
     _testContext: async (
-      {
-        _vaultLock,
-        onTestFailed,
-        task,
-      }: Pick<BaseFixtureState & TestContext, "_vaultLock" | "onTestFailed" | "task">,
+      { _vaultLock, task }: Pick<BaseFixtureState & TestContext, "_vaultLock" | "task">,
       use: (context: ObsidianTestContext) => Promise<void>,
     ) => {
-      let failedTask = false;
-      onTestFailed(() => {
-        failedTask = true;
-      });
-
       const context = await createInternalTestContext({
         ...options,
         createVault,
@@ -102,8 +93,10 @@ export function createBaseFixtures(
       try {
         await use(context);
       } finally {
+        // Vitest tears fixtures down before it calls `onTestFailed`, so read the
+        // result directly. The test body and `afterEach` hooks have already run.
         await context.cleanup({
-          failedTask: failedTask ? task : undefined,
+          failedTask: task.result?.state === "fail" ? task : undefined,
         });
       }
     },

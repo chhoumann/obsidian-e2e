@@ -1,6 +1,7 @@
 export { createObsidianTest } from "./fixtures/create-obsidian-test";
 export { createPluginTest } from "./fixtures/create-plugin-test";
 export { createPluginHarness } from "./fixtures/plugin-harness";
+export { registerFailureArtifacts } from "./fixtures/failure-artifacts";
 export {
   acquireVaultRunLock,
   clearVaultRunLockMarker,

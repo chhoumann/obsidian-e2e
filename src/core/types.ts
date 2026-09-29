@@ -62,6 +62,7 @@ export interface DevRuntimeError {
 export interface DevNoticeEvent {
   at: number;
   message: string;
+  /** @deprecated Notices are recorded from the DOM, which does not expose the timeout. */
   timeout?: number;
 }
 

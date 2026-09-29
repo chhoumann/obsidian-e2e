@@ -778,6 +778,20 @@ task-id suffix, for example:
 
 - `<pluginId>-data.json`
 
+`dom.txt` is the whole `document.body`, one tag per line, so open modals
+(`.modal-container`) and notices (`.notice-container`) are included. Scripts and
+SVG paths are dropped, and input and textarea values (except passwords) are
+written into `value` attributes. `notices.json` lists the notices on screen (`visible`) and the
+notices raised since the diagnostics were last reset (`raised`).
+
+Capture timing: Vitest runs `afterEach` hooks, fixture teardown, and
+`onTestFinished` callbacks before `onTestFailed`. `createPluginHarness()`
+captures as soon as the test body fails, before any of those run, so the
+artifacts show the modal or notice that caused the failure and the plugin data
+before the harness restores it. `createObsidianTest()` and `createPluginTest()`
+capture during fixture teardown, after your `afterEach` hooks but before
+`onTestFinished` callbacks.
+
 Artifact collection is best-effort. If a specific capture fails, the test still
 fails for its original reason and the framework writes a neighboring
 `*.error.txt` file instead. Screenshot capture is the most environment-sensitive
@@ -785,8 +799,19 @@ part of the set: desktop permissions, display availability, or Obsidian state
 can prevent `screenshot.png` from being produced, in which case you should
 expect `screenshot.error.txt` instead.
 
-If you are not using the Vitest fixtures, the same artifact capture path is
-available directly from the main package:
+For a hand-rolled Vitest lifecycle, register the same early capture from
+`beforeEach`:
+
+```ts
+import { registerFailureArtifacts } from "obsidian-e2e/vitest";
+
+beforeEach((ctx) => {
+  registerFailureArtifacts(ctx, obsidian, { captureOnFailure: true }, obsidian.plugin("quickadd"));
+});
+```
+
+If you are not using Vitest, the same artifact capture path is available
+directly from the main package:
 
 ```ts
 import { captureFailureArtifacts, createObsidianClient } from "obsidian-e2e";
