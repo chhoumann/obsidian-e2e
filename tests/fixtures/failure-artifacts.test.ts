@@ -51,7 +51,7 @@ describe("failure artifacts", () => {
     ).toBe("/tmp/artifacts/captures-artifacts-for-failures-12345678");
   });
 
-  test("captures core Obsidian artifacts on failure", async () => {
+  test("captures core Obsidian artifacts on failure", async ({ onTestFinished, task }) => {
     const artifactsDir = await createTrackedTempDir(tempDirectories, "obsidian-e2e-artifacts-");
     const vaultRoot = await createTrackedTempDir(tempDirectories, "obsidian-e2e-artifacts-vault-");
     await fs.mkdir(path.join(vaultRoot, "Inbox"), { recursive: true });
@@ -77,8 +77,11 @@ describe("failure artifacts", () => {
     });
 
     let failureHook: (() => Promise<void>) | undefined;
+    // A stand-in test in this file: capture adds its afterEach hook to the
+    // file's hooks and removes it when this test finishes.
     const failureContext = {
       task: {
+        file: task.file,
         id: "file_test_abcdef12",
         name: "writes useful artifacts",
       },
@@ -89,6 +92,7 @@ describe("failure artifacts", () => {
         onTestFailed(fn: OnTestFailedHandler) {
           failureHook = () => Promise.resolve(fn(failureContext as never));
         },
+        onTestFinished,
         task: failureContext.task,
       } as never,
       obsidian,
@@ -222,7 +226,10 @@ describe("failure artifacts", () => {
     ).resolves.toContain('"enabled": true');
   });
 
-  test("captures plugin data without duplicating core artifacts", async () => {
+  test("captures plugin data without duplicating core artifacts", async ({
+    onTestFinished,
+    task,
+  }) => {
     const artifactsDir = await createTrackedTempDir(
       tempDirectories,
       "obsidian-e2e-plugin-only-artifacts-",
@@ -260,6 +267,7 @@ describe("failure artifacts", () => {
     let pluginFailureHook: (() => Promise<void>) | undefined;
     const failureContext = {
       task: {
+        file: task.file,
         id: "file_test_plugin1234",
         name: "captures plugin fixture data once",
       },
@@ -270,6 +278,7 @@ describe("failure artifacts", () => {
         onTestFailed(fn: OnTestFailedHandler) {
           coreFailureHook = () => Promise.resolve(fn(failureContext as never));
         },
+        onTestFinished,
         task: failureContext.task,
       } as never,
       client,
@@ -284,6 +293,7 @@ describe("failure artifacts", () => {
         onTestFailed(fn: OnTestFailedHandler) {
           pluginFailureHook = () => Promise.resolve(fn(failureContext as never));
         },
+        onTestFinished,
         task: failureContext.task,
       } as never,
       plugin,

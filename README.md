@@ -788,7 +788,8 @@ Capture timing: Vitest runs `afterEach` hooks, fixture teardown, and
 `onTestFinished` callbacks before `onTestFailed`. `createPluginHarness()`
 captures as soon as the test body fails, before any of those run, so the
 artifacts show the modal or notice that caused the failure and the plugin data
-before the harness restores it. `createObsidianTest()` and `createPluginTest()`
+before the harness restores it (with `sequence.hooks: "parallel"`, alongside your
+`afterEach` hooks instead). `createObsidianTest()` and `createPluginTest()`
 capture during fixture teardown, after your `afterEach` hooks but before
 `onTestFinished` callbacks.
 

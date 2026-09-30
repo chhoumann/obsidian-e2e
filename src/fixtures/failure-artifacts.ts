@@ -1,6 +1,5 @@
+import * as vitest from "vitest";
 import type { TestContext } from "vitest";
-// Bind to "vitest/suite" (the consumer's runner), like the hooks in plugin-harness.ts.
-import { getFn, setFn } from "vitest/suite";
 
 import {
   captureFailureArtifacts,
@@ -9,7 +8,18 @@ import {
 import type { ObsidianClient, PluginHandle } from "../core/types";
 import type { CreateObsidianTestOptions } from "./types";
 
-type FailureContext = Pick<TestContext, "onTestFailed" | "task">;
+type FailureContext = Pick<TestContext, "onTestFailed" | "onTestFinished" | "task">;
+type Suite = NonNullable<FailureContext["task"]["suite"]> | FailureContext["task"]["file"];
+type AfterEachHook = (context: Pick<TestContext, "task">) => unknown;
+type GetSuiteHooks = (suite: Suite) => { afterEach: AfterEachHook[] };
+
+// Bind to the consumer's runner ("vitest"), like the hooks in plugin-harness.ts.
+// Vitest 4.1 exposes a suite's hooks as `TestRunner.getSuiteHooks`; older
+// versions only through "vitest/suite", which Vitest 5 removed.
+const runner = (vitest as unknown as { TestRunner?: { getSuiteHooks: GetSuiteHooks } }).TestRunner;
+const getSuiteHooks: GetSuiteHooks =
+  runner?.getSuiteHooks ??
+  ((await import("vitest/suite")) as unknown as { getHooks: GetSuiteHooks }).getHooks;
 
 /**
  * Runs `capture` once when the current test attempt fails, before the test's
@@ -18,16 +28,18 @@ type FailureContext = Pick<TestContext, "onTestFailed" | "task">;
  * Vitest runs `afterEach` hooks, fixture teardown and `onTestFinished` before
  * `onTestFailed`, so a capture registered with `onTestFailed` alone records the
  * UI after cleanup has closed modals, removed notices and restored plugin data.
- * Vitest reads the test function after the `beforeEach` hooks, so wrapping it
- * here captures as soon as the test body fails. `onTestFailed` still covers
+ * Vitest reads the test's suite's `afterEach` hooks when it calls them, before
+ * any parent suite's, and runs the last added first (the default
+ * `sequence.hooks: "stack"`) or the first added first (`"list"`). A hook added
+ * at both ends of that list here therefore runs before every other cleanup,
+ * once the test body has passed or failed. `onTestFailed` still covers
  * failures raised later, for example by an `afterEach` hook.
  */
 export function captureOnTestFailure(
   context: FailureContext,
   capture: () => Promise<unknown>,
 ): void {
-  const test = context.task as Parameters<typeof setFn>[0];
-  const run = getFn(test);
+  const test = context.task;
   let captured = false;
 
   const captureOnce = async () => {
@@ -41,23 +53,28 @@ export function captureOnTestFailure(
     });
   };
 
-  setFn(test, async () => {
-    try {
-      await run();
-    } catch (error) {
+  // `expect.soft` failures mark the test failed without throwing, so read the
+  // result rather than catching. Concurrent tests share the suite's hooks.
+  const captureIfFailed: AfterEachHook = async (hookContext) => {
+    if (hookContext.task === test && test.result?.state === "fail") {
       await captureOnce();
-      throw error;
-    } finally {
-      // A retry runs beforeEach again and must wrap the original function.
-      setFn(test, run);
     }
+  };
 
-    // `expect.soft` failures mark the test failed without throwing.
-    if (test.result?.state === "fail") {
-      await captureOnce();
+  const hooks = getSuiteHooks(test.suite ?? test.file).afterEach;
+  hooks.push(captureIfFailed);
+  hooks.unshift(captureIfFailed);
+  // Runs after the afterEach hooks, once per attempt; a retry runs beforeEach
+  // and adds the hook again.
+  context.onTestFinished(() => {
+    for (
+      let index = hooks.indexOf(captureIfFailed);
+      index !== -1;
+      index = hooks.indexOf(captureIfFailed)
+    ) {
+      hooks.splice(index, 1);
     }
   });
-
   context.onTestFailed(captureOnce);
 }
 
