@@ -9,6 +9,7 @@ import {
 } from "../helpers/create-temp-dir";
 import { createStubObsidianClient } from "../helpers/stub-obsidian-client";
 import { createExecResult, frameEvalPayload } from "../helpers/create-exec-result";
+import { createFakePluginApp } from "../helpers/fake-plugin-app";
 import type { CommandTransport } from "../../src/core/types";
 
 const tempDirectories: string[] = [];
@@ -392,6 +393,58 @@ describe("plugin data ergonomics", () => {
 
     await expect(plugin.data<{ count: number }>().read()).resolves.toEqual({ count: 1 });
     expect(reloadAttempts).toBe(2);
+  });
+});
+
+describe("plugin lifecycle under lost CLI replies", () => {
+  function createLifecycleFixture(enabled: boolean) {
+    const app = createFakePluginApp({ enabled, pluginId: "quickadd", vaultRoot: "/tmp/vault" });
+    const client = createObsidianClient({
+      intervalMs: 5,
+      timeoutMs: 500,
+      transport: app.transport,
+      vault: "dev",
+    });
+
+    return { app, plugin: client.plugin("quickadd") };
+  }
+
+  test("reload enables a plugin that an earlier failure left disabled", async () => {
+    const { app, plugin } = createLifecycleFixture(false);
+
+    await plugin.reload({ waitUntilReady: true });
+
+    expect(app.isEnabled()).toBe(true);
+  });
+
+  test("disable succeeds when Obsidian disabled the plugin but the reply was lost", async () => {
+    const { app, plugin } = createLifecycleFixture(true);
+    app.failNext("plugin:disable", "lose-reply");
+
+    await plugin.disable();
+
+    expect(app.isEnabled()).toBe(false);
+  });
+
+  test("enable resends when the first request never reached Obsidian", async () => {
+    const { app, plugin } = createLifecycleFixture(false);
+    app.failNext("plugin:enable", "lose-request");
+
+    await plugin.enable();
+
+    expect(app.isEnabled()).toBe(true);
+  });
+
+  test("enable succeeds when Obsidian enabled the plugin but the reply was lost", async () => {
+    const { app, plugin } = createLifecycleFixture(false);
+    app.failNext("plugin:enable", "lose-reply");
+
+    await plugin.enable();
+
+    expect(app.isEnabled()).toBe(true);
+    expect(app.calls.filter((call) => call.startsWith("plugin:enable"))).toEqual([
+      "plugin:enable -> Enabled: quickadd",
+    ]);
   });
 });
 
