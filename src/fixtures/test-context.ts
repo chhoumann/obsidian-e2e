@@ -12,14 +12,15 @@ import type { CreateObsidianTestOptions, PluginSessionOptions, TestContext } fro
 interface CreateInternalTestContextOptions extends CreateObsidianTestOptions {
   beforeSandbox?: (obsidian: ObsidianClient) => Promise<void> | void;
   createVault?: (obsidian: ObsidianClient) => Promise<VaultApi> | VaultApi;
+  keepPluginsEnabled?: boolean;
   testName?: string;
   vaultLock?: VaultRunLock | null;
 }
 
 interface TrackedPluginSession {
+  disableOnCleanup: boolean;
   filter?: PluginSessionOptions["filter"];
   plugin: PluginHandle;
-  wasEnabled: boolean;
 }
 
 export async function createTestContext(
@@ -94,7 +95,7 @@ export async function createInternalTestContext(
           await getClientInternals(obsidian).restoreAll();
         } finally {
           for (const session of [...trackedPlugins.values()].reverse()) {
-            if (!session.wasEnabled) {
+            if (session.disableOnCleanup) {
               await recordCleanupError(cleanupErrors, async () =>
                 session.plugin.disable({ filter: session.filter }),
               );
@@ -154,9 +155,9 @@ export async function createInternalTestContext(
         }
 
         trackedPlugins.set(id, {
+          disableOnCleanup: !wasEnabled && !options.keepPluginsEnabled,
           filter: sessionOptions.filter,
           plugin,
-          wasEnabled,
         });
 
         return plugin;

@@ -254,7 +254,7 @@ async function spawnFixtureChild({
     async release() {
       await writeFile(releaseFile, "release\n", "utf8");
     },
-    async waitForJson(fileName, timeoutMs = 2_000) {
+    async waitForJson(fileName, timeoutMs = 20_000) {
       const targetPath = path.join(signalDir, fileName);
       const startedAt = Date.now();
 

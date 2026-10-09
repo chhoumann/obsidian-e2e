@@ -715,6 +715,14 @@ only then the vault-lock release - so a waiting run never acquires the vault
 mid-cleanup. A failed marker clear fails the suite instead of being swallowed,
 since it means Obsidian retained stale ownership metadata.
 
+The harness leaves the plugin enabled after the suite, even if it found the
+plugin disabled. A disabled plugin under test is left over from an earlier
+failure, and disabling it again would fail every later suite in the run. Each
+data restore re-enables the plugin and waits until it is ready, even when
+`beforeDataRestore` or the restore itself fails. `teardownTimeoutMs` (default
+90 seconds) bounds both `afterEach` and `afterAll`, so a restore that has to
+retry a lost CLI reply finishes before the next test starts.
+
 `resolveObsidianEnvOptions()` maps the canonical `OBSIDIAN_E2E_VAULT`,
 `OBSIDIAN_E2E_VAULT_PATH`, and `OBSIDIAN_E2E_OBSIDIAN_HOME` env (with an optional
 `legacyPrefix` fallback such as `PODNOTES_E2E_VAULT`) into spreadable client
@@ -1035,6 +1043,14 @@ test("waits for generated content and plugin state", async ({ obsidian, sandbox,
   );
 });
 ```
+
+`plugin.enable()` and `plugin.disable()` read the plugin's enabled flag back
+from Obsidian instead of trusting the CLI reply. If the reply is lost but the
+toggle took effect, they resolve. If the request never reached Obsidian, they
+send it once more. If Obsidian answers but the flag did not change (for example
+`Failed to enable`), they throw `ObsidianCommandError`. `plugin.reload()` on a
+disabled plugin enables it, which loads the plugin's `main.js` from disk. Any
+other `Error:` reply to a reload throws `ObsidianCommandError`.
 
 If you just need time to pass without inventing a fake polling condition, use
 `await obsidian.sleep(ms)`.

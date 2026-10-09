@@ -174,6 +174,16 @@ describe("createObsidianClient", () => {
 
   test("applies default exec options to plugin and command handles", async () => {
     const transport = vi.fn<CommandTransport>().mockImplementation(async (request) => {
+      if (request.argv[1] === "plugin") {
+        return {
+          argv: request.argv,
+          command: request.bin,
+          exitCode: 0,
+          stderr: "",
+          stdout: "enabled\ttrue\n",
+        };
+      }
+
       if (request.argv[1] === "plugin:reload" || request.argv[1] === "command") {
         return {
           argv: request.argv,
@@ -205,8 +215,17 @@ describe("createObsidianClient", () => {
     });
     await client.command("workspace:save").run();
 
-    expect(transport).toHaveBeenNthCalledWith(
-      1,
+    expect(transport).toHaveBeenCalledWith(
+      expect.objectContaining({
+        argv: ["vault=dev", "plugin", "id=quickadd"],
+        cwd: "/tmp/default",
+        env: {
+          BASE: "1",
+          EXTRA: "2",
+        },
+      }),
+    );
+    expect(transport).toHaveBeenCalledWith(
       expect.objectContaining({
         argv: ["vault=dev", "plugin:reload", "id=quickadd"],
         cwd: "/tmp/default",
@@ -216,8 +235,7 @@ describe("createObsidianClient", () => {
         },
       }),
     );
-    expect(transport).toHaveBeenNthCalledWith(
-      2,
+    expect(transport).toHaveBeenCalledWith(
       expect.objectContaining({
         argv: ["vault=dev", "command", "id=workspace:save"],
         cwd: "/tmp/default",

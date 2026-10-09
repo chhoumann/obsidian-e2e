@@ -9,6 +9,7 @@ import { createPluginHarnessSession } from "../../src/fixtures/plugin-harness";
 import type { CreatePluginHarnessOptions } from "../../src/fixtures/plugin-harness";
 import { createExecResult, frameEvalPayload } from "../helpers/create-exec-result";
 import { cleanupTempDirectories, createTempDir } from "../helpers/create-temp-dir";
+import { ObsidianCommandError, ObsidianCommandTimeoutError } from "../../src/core/errors";
 import type { CommandTransport } from "../../src/core/types";
 
 const PLUGIN_ID = "harness-plugin";
@@ -23,9 +24,12 @@ afterEach(async () => {
 interface HarnessFixture {
   dataPath: string;
   events: string[];
+  isEnabled(): boolean;
+  loseNextDisableReply(): void;
   lockRoot: string;
+  refuseEnable(): void;
   setEnabled(value: boolean): void;
-  setThrowOnDisable(value: boolean): void;
+  setThrowOnMarkerClear(value: boolean): void;
   transport: CommandTransport;
   vaultRoot: string;
 }
@@ -40,7 +44,9 @@ async function createHarnessFixture(): Promise<HarnessFixture> {
 
   const events: string[] = [];
   let enabled = true;
-  let throwOnDisable = false;
+  let throwOnMarkerClear = false;
+  let loseNextDisableReply = false;
+  let refuseEnable = false;
 
   const transport: CommandTransport = async (request) => {
     if (request.argv[0] === "--help") {
@@ -72,30 +78,49 @@ async function createHarnessFixture(): Promise<HarnessFixture> {
     }
 
     if (command === "plugin:enable") {
+      if (refuseEnable) {
+        return createExecResult(
+          request.bin,
+          request.argv,
+          `Error: Failed to enable: ${PLUGIN_ID}\n`,
+        );
+      }
+
       enabled = true;
       events.push("plugin:enable");
       return createExecResult(request.bin, request.argv, "");
     }
 
     if (command === "plugin:disable") {
-      if (throwOnDisable) {
-        throw new Error("plugin:disable failed");
-      }
-
       enabled = false;
       events.push("plugin:disable");
+
+      if (loseNextDisableReply) {
+        loseNextDisableReply = false;
+        throw new ObsidianCommandTimeoutError(request.bin, request.argv, 0);
+      }
+
       return createExecResult(request.bin, request.argv, "");
     }
 
     if (command === "plugin:reload") {
       events.push("plugin:reload");
-      return createExecResult(request.bin, request.argv, "");
+      // Obsidian answers a reload of a disabled plugin with an error on exit code 0.
+      return createExecResult(
+        request.bin,
+        request.argv,
+        enabled ? "" : `Error: Plugin "${PLUGIN_ID}" is not enabled.\n`,
+      );
     }
 
     if (command === "eval") {
       const code = args.code ?? "";
 
       if (code.includes("delete window.__obsidianE2ELock")) {
+        if (throwOnMarkerClear) {
+          throw new Error("marker clear failed");
+        }
+
         events.push("eval:clearMarker");
         return createExecResult(request.bin, request.argv, "cleared\n");
       }
@@ -110,7 +135,7 @@ async function createHarnessFixture(): Promise<HarnessFixture> {
         return createExecResult(
           request.bin,
           request.argv,
-          `${frameEvalPayload(code, JSON.stringify({ ok: true, value: true }))}\n`,
+          `${frameEvalPayload(code, JSON.stringify({ ok: true, value: enabled }))}\n`,
         );
       }
 
@@ -130,12 +155,19 @@ async function createHarnessFixture(): Promise<HarnessFixture> {
   return {
     dataPath,
     events,
+    isEnabled: () => enabled,
+    loseNextDisableReply() {
+      loseNextDisableReply = true;
+    },
     lockRoot,
+    refuseEnable() {
+      refuseEnable = true;
+    },
     setEnabled(value: boolean) {
       enabled = value;
     },
-    setThrowOnDisable(value: boolean) {
-      throwOnDisable = value;
+    setThrowOnMarkerClear(value: boolean) {
+      throwOnMarkerClear = value;
     },
     transport,
     vaultRoot,
@@ -213,7 +245,7 @@ describe("createPluginHarness runner binding", () => {
     }
   });
 
-  it('externalizes the runner as "vitest" in the built dist', () => {
+  it('externalizes the runner as "vitest" in the built dist', { timeout: 60_000 }, () => {
     // The source guard above is not enough on its own: inside this package
     // "vitest" is aliased to vite-plus-test, so if the vitest peer dep were dropped
     // vp pack would bundle that runner inline (emitting a local `function beforeAll`)
@@ -296,8 +328,7 @@ describe("createPluginHarnessSession", () => {
 
   it("aggregates multiple teardown errors and still releases the lock", async () => {
     const fixture = await createHarnessFixture();
-    fixture.setEnabled(false);
-    fixture.setThrowOnDisable(true);
+    fixture.setThrowOnMarkerClear(true);
 
     const session = createPluginHarnessSession(
       {
@@ -346,5 +377,99 @@ describe("createPluginHarnessSession", () => {
     expect(fixture.events).toContain("eval:marker");
     expect(fixture.events).not.toContain("plugin:reload");
     await expect(fs.readdir(fixture.lockRoot)).resolves.toHaveLength(0);
+  });
+});
+
+describe("createPluginHarnessSession under lost CLI replies", () => {
+  it("leaves a plugin it found disabled enabled after teardown", async () => {
+    const fixture = await createHarnessFixture();
+    fixture.setEnabled(false);
+    const session = createPluginHarnessSession(baseOptions(fixture), "found-disabled");
+
+    await session.setup();
+    await session.teardown();
+
+    expect(fixture.isEnabled()).toBe(true);
+  });
+
+  it("restores data and re-enables the plugin when the disable reply is lost", async () => {
+    const fixture = await createHarnessFixture();
+    const session = createPluginHarnessSession(baseOptions(fixture), "lost-disable-reply");
+
+    await session.setup();
+    await session.getContext().plugin.data().write({ changed: true });
+    fixture.loseNextDisableReply();
+
+    await session.restoreData();
+
+    expect(fixture.isEnabled()).toBe(true);
+    await expect(fs.readFile(fixture.dataPath, "utf8")).resolves.not.toContain('"changed"');
+    await session.teardown();
+  });
+
+  it("reports a restore hook that rejects without a reason", async () => {
+    const fixture = await createHarnessFixture();
+    const session = createPluginHarnessSession(
+      {
+        ...baseOptions(fixture),
+        beforeDataRestore: () => Promise.reject(),
+      },
+      "restore-rejects-undefined",
+    );
+
+    await session.setup();
+
+    try {
+      const outcome = await session.restoreData().then(
+        () => "resolved",
+        () => "rejected",
+      );
+
+      expect(outcome).toBe("rejected");
+      expect(fixture.isEnabled()).toBe(true);
+    } finally {
+      await session.teardown().catch(() => {});
+    }
+  });
+
+  it("reports both failures when the restore and the re-enable fail", async () => {
+    const fixture = await createHarnessFixture();
+    const session = createPluginHarnessSession(baseOptions(fixture), "restore-and-enable-fail");
+
+    await session.setup();
+    await session.getContext().plugin.data().write({ changed: true });
+    const pluginDir = path.dirname(fixture.dataPath);
+    await fs.rm(pluginDir, { force: true, recursive: true });
+    await fs.writeFile(pluginDir, "", "utf8");
+    fixture.refuseEnable();
+
+    const error = await session.restoreData().catch((thrown: unknown) => thrown);
+
+    expect(error).toBeInstanceOf(AggregateError);
+    const [restoreError, enableError] = (error as AggregateError).errors;
+    expect(restoreError).toMatchObject({ code: "ENOTDIR" });
+    expect(enableError).toBeInstanceOf(ObsidianCommandError);
+    await fs.rm(pluginDir, { force: true });
+    await session.teardown().catch(() => {});
+  });
+
+  it("re-enables the plugin when restoring its data fails", async () => {
+    const fixture = await createHarnessFixture();
+    const session = createPluginHarnessSession(baseOptions(fixture), "restore-fails");
+
+    await session.setup();
+    await session.getContext().plugin.data().write({ changed: true });
+    const pluginDir = path.dirname(fixture.dataPath);
+    await fs.rm(pluginDir, { force: true, recursive: true });
+    await fs.writeFile(pluginDir, "", "utf8");
+
+    await expect(session.restoreData()).rejects.toMatchObject({
+      code: "ENOTDIR",
+      path: fixture.dataPath,
+    });
+
+    expect(fixture.isEnabled()).toBe(true);
+    await fs.rm(pluginDir, { force: true });
+    await session.teardown().catch(() => {});
   });
 });
