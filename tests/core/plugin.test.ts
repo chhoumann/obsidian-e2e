@@ -2,6 +2,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 import { createObsidianClient } from "../../src/core/client";
+import { ObsidianCommandError, ObsidianCommandTimeoutError } from "../../src/core/errors";
 import { sleep, waitForValue } from "../../src/core/wait";
 import {
   cleanupTempDirectories,
@@ -10,7 +11,7 @@ import {
 import { createStubObsidianClient } from "../helpers/stub-obsidian-client";
 import { createExecResult, frameEvalPayload } from "../helpers/create-exec-result";
 import { createFakePluginApp } from "../helpers/fake-plugin-app";
-import type { CommandTransport } from "../../src/core/types";
+import type { CommandTransport, ExecOptions } from "../../src/core/types";
 
 const tempDirectories: string[] = [];
 
@@ -82,6 +83,10 @@ describe("plugin readiness helpers", () => {
           request.argv,
           `${frameEvalPayload(String(args.code ?? ""), JSON.stringify({ ok: true, value: readyAttempts > 1 }))}\n`,
         );
+      }
+
+      if (command === "plugin") {
+        return createExecResult(request.bin, request.argv, "enabled\ttrue\n");
       }
 
       if (command === "plugin:reload") {
@@ -397,9 +402,10 @@ describe("plugin data ergonomics", () => {
 });
 
 describe("plugin lifecycle under lost CLI replies", () => {
-  function createLifecycleFixture(enabled: boolean) {
+  function createLifecycleFixture(enabled: boolean, defaultExecOptions?: ExecOptions) {
     const app = createFakePluginApp({ enabled, pluginId: "quickadd", vaultRoot: "/tmp/vault" });
     const client = createObsidianClient({
+      defaultExecOptions,
       intervalMs: 5,
       timeoutMs: 500,
       transport: app.transport,
@@ -445,6 +451,63 @@ describe("plugin lifecycle under lost CLI replies", () => {
     expect(app.calls.filter((call) => call.startsWith("plugin:enable"))).toEqual([
       "plugin:enable -> Enabled: quickadd",
     ]);
+  });
+
+  test("enable does not resend while Obsidian reports the first one still running", async () => {
+    const { app, plugin } = createLifecycleFixture(false);
+    app.failNext("plugin:enable", "still-pending");
+
+    await expect(plugin.enable()).rejects.toThrow("still running");
+
+    expect(app.calls.filter((call) => call.startsWith("plugin:enable"))).toEqual([
+      "plugin:enable -> (still running)",
+    ]);
+  });
+
+  test("enable throws when Obsidian refuses it, without resending", async () => {
+    const { app, plugin } = createLifecycleFixture(false);
+    app.failNext("plugin:enable", "refuse");
+
+    await expect(plugin.enable()).rejects.toBeInstanceOf(ObsidianCommandError);
+
+    expect(app.calls.filter((call) => call.startsWith("plugin:enable"))).toEqual([
+      "plugin:enable -> Error: Failed to enable: quickadd",
+    ]);
+  });
+
+  test("enable resends after an unanswered send even when nonzero exits are allowed", async () => {
+    const { app, plugin } = createLifecycleFixture(false, { allowNonZeroExit: true });
+    app.failNext("plugin:enable", "connect-fail");
+
+    await plugin.enable();
+
+    expect(app.isEnabled()).toBe(true);
+    expect(app.calls.filter((call) => call.startsWith("plugin:enable"))).toEqual([
+      "plugin:enable -> (exit 1)",
+      "plugin:enable -> Enabled: quickadd",
+    ]);
+  });
+
+  test("enable gives up after a resend also goes unanswered", async () => {
+    const { app, plugin } = createLifecycleFixture(false);
+    app.failNext("plugin:enable", "lose-request", "lose-request");
+
+    await expect(plugin.enable()).rejects.toBeInstanceOf(ObsidianCommandTimeoutError);
+
+    expect(app.isEnabled()).toBe(false);
+    expect(app.calls.filter((call) => call.startsWith("plugin:enable"))).toHaveLength(2);
+  });
+
+  test("reload throws when Obsidian fails to reload an enabled plugin", async () => {
+    const { app, plugin } = createLifecycleFixture(true);
+    app.failNext("plugin:reload", "refuse");
+
+    const error = await plugin.reload().catch((thrown: unknown) => thrown);
+
+    expect(error).toBeInstanceOf(ObsidianCommandError);
+    expect((error as Error).message).toBe(
+      'Obsidian answered plugin:reload for plugin "quickadd" with "Error: Failed to reload: quickadd".',
+    );
   });
 });
 

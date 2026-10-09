@@ -1,7 +1,10 @@
 import path from "node:path";
 
+import { ObsidianCommandDispatchError, ObsidianCommandError } from "../core/errors";
 import { getClientInternals } from "../core/internals";
 import type {
+  ExecOptions,
+  ExecResult,
   JsonFile,
   JsonFileUpdater,
   ObsidianClient,
@@ -17,6 +20,8 @@ import type {
 import { runEvalJson } from "../dev/eval-json";
 import { createJsonFile } from "../vault/json-file";
 
+const MAX_TOGGLE_SENDS = 2;
+
 export function createPluginHandle(client: ObsidianClient, id: string): PluginHandle {
   async function resolveDataPath() {
     const vaultPath = await client.vaultPath();
@@ -28,6 +33,62 @@ export function createPluginHandle(client: ObsidianClient, id: string): PluginHa
       return await runEvalJson<boolean>(client.dev, buildPluginLoadedCode(id));
     } catch {
       return false;
+    }
+  }
+
+  async function readEnabledFlag(execOptions: ExecOptions = {}): Promise<boolean | null> {
+    const output = await client.execText(
+      "plugin",
+      { id },
+      { ...execOptions, allowNonZeroExit: true },
+    );
+    const match = /^enabled\s+(true|false)\s*$/m.exec(output);
+    return match ? match[1] === "true" : null;
+  }
+
+  async function setEnabled(
+    enabled: boolean,
+    options: PluginToggleOptions,
+    execOptions: ExecOptions = {},
+  ): Promise<void> {
+    const command = enabled ? "plugin:enable" : "plugin:disable";
+
+    for (let send = 1; ; send += 1) {
+      let served: ExecResult | undefined;
+      let sendError: unknown;
+
+      try {
+        // A nonzero exit means no reply was served, so it must take the resend path.
+        served = await client.exec(
+          command,
+          { filter: options.filter, id },
+          { ...execOptions, allowNonZeroExit: false },
+        );
+      } catch (error) {
+        sendError = error;
+      }
+
+      const flag = await readEnabledFlag(execOptions);
+
+      if (flag === enabled) {
+        return;
+      }
+
+      if (served) {
+        const state = flag === null ? "reported no enabled flag" : `its enabled flag is ${flag}`;
+        throw new ObsidianCommandError(
+          `Obsidian answered ${command} for plugin "${id}" with "${served.stdout.trim()}", but ${state}.`,
+          served,
+        );
+      }
+
+      // A second enable during Obsidian's `loadPlugin` read of main.js would load the plugin twice.
+      const stillRunning =
+        sendError instanceof ObsidianCommandDispatchError && sendError.reason === "still-pending";
+
+      if (send === MAX_TOGGLE_SENDS || stillRunning) {
+        throw sendError;
+      }
     }
   }
 
@@ -63,26 +124,32 @@ export function createPluginHandle(client: ObsidianClient, id: string): PluginHa
       return resolveDataPath();
     },
     async disable(options: PluginToggleOptions = {}) {
-      await client.exec("plugin:disable", {
-        filter: options.filter,
-        id,
-      });
+      await setEnabled(false, options);
     },
     async enable(options: PluginToggleOptions = {}) {
-      await client.exec("plugin:enable", {
-        filter: options.filter,
-        id,
-      });
+      await setEnabled(true, options);
     },
     id,
     async isEnabled() {
-      const output = await client.execText("plugin", { id }, { allowNonZeroExit: true });
-      return /enabled\s+true/i.test(output);
+      return (await readEnabledFlag()) === true;
     },
     async reload(options: PluginReloadOptions = {}) {
       const { readyOptions, waitUntilReady, ...execOptions } = options;
 
-      await client.exec("plugin:reload", { id }, execOptions);
+      // Obsidian refuses to reload a disabled plugin (an exit-0 "Error:" reply).
+      // Enabling loads its main.js from disk, which is the reload asked for.
+      if ((await readEnabledFlag(execOptions)) === false) {
+        await setEnabled(true, {}, execOptions);
+      } else {
+        const result = await client.exec("plugin:reload", { id }, execOptions);
+
+        if (result.stdout.startsWith("Error:")) {
+          throw new ObsidianCommandError(
+            `Obsidian answered plugin:reload for plugin "${id}" with "${result.stdout.trim()}".`,
+            result,
+          );
+        }
+      }
 
       if (waitUntilReady) {
         await this.waitUntilReady(readyOptions);

@@ -6,9 +6,6 @@ import { test } from "vite-plus/test";
 import { executeCommand } from "../../src/core/transport";
 import { sleep } from "../../src/core/wait";
 
-// Run by tests/core/transport.test.ts in a child `vp test`. The test ends while
-// a CLI client is still waiting for its reply, so Vitest stops the worker with
-// the call in flight; the parent then checks the client did not outlive it.
 test.runIf(process.env.OBSIDIAN_E2E_ORPHAN_CHILD === "1")(
   "ends while a CLI client is in flight",
   async () => {

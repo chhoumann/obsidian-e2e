@@ -24,7 +24,7 @@ import { createInternalTestContext } from "./test-context";
 import type { CreateObsidianTestOptions, TestContext } from "./types";
 
 const DEFAULT_SETUP_TIMEOUT_MS = 90_000;
-const DEFAULT_TEARDOWN_TIMEOUT_MS = 30_000;
+const DEFAULT_TEARDOWN_TIMEOUT_MS = 90_000;
 const DEFAULT_RELOAD_TIMEOUT_MS = 30_000;
 const DEFAULT_READY_INTERVAL_MS = 200;
 const DEFAULT_LOCK_TIMEOUT_MS = 60_000;
@@ -62,7 +62,7 @@ export interface CreatePluginHarnessOptions extends CreateObsidianTestOptions {
   symlinkArtifacts?: string[];
   /** Root the symlinked artifacts must point at. Defaults to `process.cwd()`. */
   symlinkRepoRoot?: string;
-  /** `afterAll` timeout in ms. Defaults to 30000. */
+  /** `afterEach` and `afterAll` timeout in ms. Defaults to 90000. */
   teardownTimeoutMs?: number;
   /** Extra readiness predicate beyond plugin-loaded and the ready command. */
   waitUntilReady?: (obsidian: ObsidianClient) => boolean | Promise<boolean>;
@@ -102,7 +102,7 @@ export function createPluginHarness(
 
     beforeEach(() => session.resetDiagnostics());
 
-    afterEach(() => session.restoreData());
+    afterEach(() => session.restoreData(), teardownTimeoutMs);
 
     afterAll(() => session.teardown(), teardownTimeoutMs);
 
@@ -167,11 +167,33 @@ export function createPluginHarnessSession(
       return;
     }
 
-    await beforeDataRestore?.(context.obsidian);
-    await plugin.disable({ filter: pluginFilter });
-    await plugin.restoreData();
-    await plugin.enable({ filter: pluginFilter });
-    await plugin.waitUntilReady(readyWaitOptions);
+    const errors: unknown[] = [];
+
+    try {
+      await beforeDataRestore?.(context.obsidian);
+      await plugin.disable({ filter: pluginFilter });
+      await plugin.restoreData();
+    } catch (error) {
+      errors.push(error);
+    }
+
+    try {
+      await plugin.enable({ filter: pluginFilter });
+      await plugin.waitUntilReady(readyWaitOptions);
+    } catch (error) {
+      errors.push(error);
+    }
+
+    if (errors.length === 1) {
+      throw errors[0];
+    }
+
+    if (errors.length > 1) {
+      throw new AggregateError(
+        errors,
+        `Plugin "${pluginId}" data restore and re-enable both failed.`,
+      );
+    }
   }
 
   return {
@@ -197,6 +219,7 @@ export function createPluginHarnessSession(
       context = await createInternalTestContext({
         ...testOptions,
         beforeSandbox: needsPreflight ? runPreflight : undefined,
+        keepPluginsEnabled: true,
         sharedVaultLock: testOptions.sharedVaultLock ?? {
           onBusy: "wait",
           timeoutMs: DEFAULT_LOCK_TIMEOUT_MS,

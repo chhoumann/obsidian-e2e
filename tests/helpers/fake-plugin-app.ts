@@ -1,18 +1,22 @@
-import { ObsidianCommandTimeoutError } from "../../src/core/errors";
+import {
+  ObsidianCommandDispatchError,
+  ObsidianCommandError,
+  ObsidianCommandTimeoutError,
+} from "../../src/core/errors";
 import type { CommandTransport } from "../../src/core/types";
 import { createExecResult, frameEvalPayload } from "./create-exec-result";
 
-/**
- * `lose-request`: the command never reaches Obsidian. `lose-reply`: Obsidian
- * runs it, then the reply is lost. Both surface as a transport timeout.
- */
-export type CommandFault = "lose-reply" | "lose-request";
+export type CommandFault =
+  | "connect-fail"
+  | "lose-reply"
+  | "lose-request"
+  | "refuse"
+  | "still-pending";
 
 export interface FakePluginApp {
   readonly calls: string[];
   failNext(command: string, ...faults: CommandFault[]): void;
   isEnabled(): boolean;
-  setEnabled(value: boolean): void;
   transport: CommandTransport;
 }
 
@@ -48,7 +52,6 @@ export function createFakePluginApp(options: {
       case "plugin:reload":
         return enabled ? `Reloaded: ${pluginId}` : `Error: Plugin "${pluginId}" is not enabled.`;
       case "eval":
-        // Every framed eval the plugin handle sends is a live-state probe.
         return frameEvalPayload(args.code ?? "", JSON.stringify({ ok: true, value: enabled }));
       default:
         throw new Error(`Unhandled fake command: ${command}`);
@@ -68,11 +71,36 @@ export function createFakePluginApp(options: {
     const fault = faults.get(command)?.shift();
     const lost = () => new ObsidianCommandTimeoutError(request.bin, request.argv, 0);
 
+    if (fault === "connect-fail") {
+      calls.push(`${command} -> (exit 1)`);
+      const result = { ...createExecResult(request.bin, request.argv, ""), exitCode: 1 };
+
+      if (!request.allowNonZeroExit) {
+        throw new ObsidianCommandError("Obsidian command failed with exit code 1", result);
+      }
+
+      return result;
+    }
+
     if (fault === "lose-request") {
+      calls.push(`${command} -> (request lost)`);
       throw lost();
     }
 
-    const reply = run(command, args);
+    if (fault === "still-pending") {
+      calls.push(`${command} -> (still running)`);
+      throw new ObsidianCommandDispatchError(
+        "still running",
+        "still-pending",
+        "nonce",
+        request.argv,
+      );
+    }
+
+    const reply =
+      fault === "refuse"
+        ? `Error: Failed to ${command.replace("plugin:", "")}: ${pluginId}`
+        : run(command, args);
     calls.push(`${command} -> ${reply.split("\n")[0]}`);
 
     if (fault === "lose-reply") {
@@ -88,9 +116,6 @@ export function createFakePluginApp(options: {
       faults.set(command, [...(faults.get(command) ?? []), ...nextFaults]);
     },
     isEnabled: () => enabled,
-    setEnabled(value) {
-      enabled = value;
-    },
     transport,
   };
 }

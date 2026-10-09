@@ -84,6 +84,16 @@ describe("executeCommand", () => {
     expect((error as ObsidianCommandError).result.stderr).toBe("broken");
   });
 
+  it("rejects a client killed by a signal instead of resolving it as success", async () => {
+    const error = await executeCommand({
+      argv: ["-e", "process.kill(process.pid, 'SIGTERM')"],
+      bin: process.execPath,
+    }).catch((thrown: unknown) => thrown);
+
+    expect(error).toBeInstanceOf(ObsidianCommandError);
+    expect((error as ObsidianCommandError).result.exitCode).toBe(143);
+  });
+
   // Real child process and wall clock on purpose: this exercises the actual
   // spawn/kill timeout path; fake timers cannot advance a separate process.
   it("kills an overrunning command and rejects with ObsidianCommandTimeoutError", async () => {
