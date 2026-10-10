@@ -4,7 +4,7 @@ import { once } from "node:events";
 const vaultLockModulePath = new URL("../../src/fixtures/vault-lock.ts", import.meta.url);
 const { acquireVaultRunLock } = await import(vaultLockModulePath.href);
 
-type VaultLockChildMode = "acquire-and-release" | "crash-after-acquire" | "hold";
+type VaultLockChildMode = "crash-after-acquire" | "hold";
 
 const [, , modeArg, lockRoot, vaultPath, staleMsArg] = process.argv;
 

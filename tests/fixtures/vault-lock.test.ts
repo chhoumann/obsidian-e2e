@@ -239,7 +239,7 @@ describe("vault lock", () => {
       expect(state?.metadata.ownerId).toBe(holderAcquired.ownerId);
     });
 
-    const waiter = spawnVaultLockChild("acquire-and-release", lockRoot, vaultPath);
+    const waiter = spawnVaultLockChild("hold", lockRoot, vaultPath);
     await waiter.nextEvent("attempting");
     await expectLockState(lockRoot, vaultPath, (state) => {
       expect(state).not.toBeNull();
@@ -256,6 +256,7 @@ describe("vault lock", () => {
       expect(state?.metadata.ownerId).toBe(waiterAcquired.ownerId);
     });
 
+    waiter.release();
     const waiterReleased = await waiter.nextEvent("released", 5_000);
 
     expect(waiterAcquired.ownerId).not.toBe(holderAcquired.ownerId);
@@ -295,7 +296,7 @@ describe("vault lock", () => {
       staleMs,
     );
 
-    const waiter = spawnVaultLockChild("acquire-and-release", lockRoot, vaultPath, staleMs);
+    const waiter = spawnVaultLockChild("hold", lockRoot, vaultPath, staleMs);
     await waiter.nextEvent("attempting");
     const waiterAcquired = await waiter.nextEvent("acquired", 3_000);
     await expectLockState(lockRoot, vaultPath, (state) => {
@@ -303,6 +304,7 @@ describe("vault lock", () => {
       expect(state?.isStale).toBe(false);
       expect(state?.metadata.ownerId).toBe(waiterAcquired.ownerId);
     });
+    waiter.release();
     const waiterReleased = await waiter.nextEvent("released");
     expect(crashedAcquired.acquiredAt).toBeTypeOf("number");
     const crashedAcquiredAt = crashedAcquired.acquiredAt ?? 0;
@@ -315,7 +317,7 @@ describe("vault lock", () => {
   });
 });
 
-type VaultLockChildMode = "acquire-and-release" | "crash-after-acquire" | "hold";
+type VaultLockChildMode = "crash-after-acquire" | "hold";
 
 interface VaultLockChildEvent {
   acquiredAt?: number;
