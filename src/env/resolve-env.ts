@@ -21,6 +21,8 @@ export interface ResolveObsidianEnvOptions {
   legacyPrefix?: string;
   /** Fallback vault name when no canonical or legacy vault env is set. */
   vault?: string;
+  /** Defaults to `process.platform`; decides how the CLI socket is located. */
+  platform?: NodeJS.Platform;
 }
 
 export interface ResolvedObsidianEnvOptions extends Partial<CreateObsidianClientOptions> {
@@ -37,8 +39,8 @@ export interface ResolvedObsidianEnvOptions extends Partial<CreateObsidianClient
  * Resolve canonical `OBSIDIAN_E2E_*` env into spreadable client options.
  *
  * The Obsidian home (`OBSIDIAN_E2E_OBSIDIAN_HOME`) is injected into
- * `defaultExecOptions.env.HOME` per-client so the CLI hits the intended socket
- * without ever mutating `process.env`.
+ * `defaultExecOptions.env` per-client (see {@link privateHomeEnv}) so the CLI
+ * hits the intended socket without ever mutating `process.env`.
  */
 export function resolveObsidianEnvOptions(
   options: ResolveObsidianEnvOptions = {},
@@ -64,11 +66,26 @@ export function resolveObsidianEnvOptions(
 
   if (obsidianHome) {
     resolved.defaultExecOptions = {
-      env: { ...env, HOME: obsidianHome },
+      env: privateHomeEnv(obsidianHome, env, options.platform),
     };
   }
 
   return resolved;
+}
+
+/**
+ * The env that binds the Obsidian app and its CLI to a private HOME. On Linux
+ * both put the CLI socket in `$XDG_RUNTIME_DIR` when it is set, so it follows
+ * the private HOME too; otherwise every isolated instance shares one socket.
+ */
+export function privateHomeEnv(
+  home: string,
+  env: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform = process.platform,
+): NodeJS.ProcessEnv {
+  return platform === "linux"
+    ? { ...env, HOME: home, XDG_RUNTIME_DIR: home }
+    : { ...env, HOME: home };
 }
 
 export interface VerifyVaultPathOptions {

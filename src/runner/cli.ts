@@ -3,6 +3,7 @@ import path from "node:path";
 import process from "node:process";
 
 import { commandErrorMessage } from "../core/errors";
+import { privateHomeEnv } from "../env/resolve-env";
 import {
   parseArgs,
   SHARED_BOOLEAN_OPTIONS,
@@ -105,8 +106,9 @@ const RUN_SPEC: ArgsParserSpec = {
 export function obsidianEnv(
   options: { obsidianHome: string },
   env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
 ): NodeJS.ProcessEnv {
-  return { ...env, HOME: options.obsidianHome };
+  return privateHomeEnv(options.obsidianHome, env, platform);
 }
 
 /** Prefix the forwarded command with the `vault=<name>` selector the CLI expects. */
@@ -132,7 +134,7 @@ export function spawnObsidian(
   return new Promise((resolve) => {
     const child = spawn(options.obsidianBin, obsidianCommandArgs(options.vaultName, command), {
       stdio: "inherit",
-      env: obsidianEnv(options, deps.env),
+      env: obsidianEnv(options, deps.env, deps.exec?.platform),
     });
     child.on("error", (error) => {
       stderr(`Failed to run obsidian: ${commandErrorMessage(error)}\n`);
@@ -291,6 +293,7 @@ async function runStart(
         obsidianHome: options.obsidianHome,
         obsidianBin: options.obsidianBin,
         envPrefix: config.envPrefix,
+        platform: deps.exec?.platform,
       }),
     );
   }
@@ -489,7 +492,8 @@ const SHARED_FLAGS = [
   "  --worktree <dir>        worktree to isolate (default: current directory)",
   "  --data <file>           data.json seed copied verbatim on first provision",
   "  --profile-root <dir>    private profile root (default: /tmp/<pluginId>-obsidian-e2e)",
-  "  --obsidian-app <name>   Obsidian .app name (default: Obsidian)",
+  "  --obsidian-app <app>    Obsidian .app name, or the executable on Linux (default: Obsidian,",
+  "                          /opt/Obsidian/obsidian on Linux)",
   "  --obsidian-bin <path>   obsidian CLI binary (default: obsidian)",
   "  --config <file>         path to obsidian-e2e.config.mjs (default: <worktree>/obsidian-e2e.config.mjs)",
   "  --force                 relink plugin artifacts even if a conflicting entry exists",
@@ -540,7 +544,8 @@ function subcommandHelp(subcommand: Exclude<Subcommand, "android" | "capture">):
         "",
         "Flags:",
         SHARED_FLAGS,
-        "  --print-env             emit `export OBSIDIAN_E2E_*` lines on stdout for eval",
+        "  --print-env             emit `export OBSIDIAN_E2E_*` lines (and XDG_RUNTIME_DIR on Linux)",
+        "                          on stdout for eval",
         "  --no-launch             prepare the profile only; do not launch or verify",
         "  --skip-version-guard    skip the minAppVersion / mid-session update guard",
       ].join("\n");

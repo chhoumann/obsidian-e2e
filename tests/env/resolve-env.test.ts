@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import { resolveObsidianEnvOptions, verifyVaultPath } from "../../src/env/resolve-env";
+import { linuxCliSocket } from "../helpers/cli-socket";
 
 describe("resolveObsidianEnvOptions", () => {
   it("maps the canonical OBSIDIAN_E2E_* names", () => {
@@ -56,6 +57,15 @@ describe("resolveObsidianEnvOptions", () => {
     expect(resolved.defaultExecOptions?.env?.HOME).toBe("/home/e2e");
     expect(env.HOME).toBe("/home/original");
     expect(resolved.defaultExecOptions?.env).not.toBe(env);
+  });
+
+  it("on Linux points the CLI at the private socket even with XDG_RUNTIME_DIR set", () => {
+    const resolved = resolveObsidianEnvOptions({
+      env: { OBSIDIAN_E2E_OBSIDIAN_HOME: "/home/e2e", XDG_RUNTIME_DIR: "/run/user/1000" },
+      platform: "linux",
+    });
+
+    expect(linuxCliSocket(resolved.defaultExecOptions?.env)).toBe("/home/e2e/.obsidian-cli.sock");
   });
 
   it("passes through with defaults when no env is set", () => {

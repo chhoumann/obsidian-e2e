@@ -1,7 +1,9 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 
-import { afterEach, describe, expect, test } from "vite-plus/test";
+import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 
+import { linuxCliSocket } from "../helpers/cli-socket";
 import { cleanupTempDirectories, createTempDir } from "../helpers/create-temp-dir";
 import type {
   ExecFileFn,
@@ -9,6 +11,7 @@ import type {
   ExecFileRunOptions,
   InstanceReadyTarget,
   LaunchTarget,
+  SpawnDetachedFn,
   VaultExecTarget,
 } from "../../src/runner/launch";
 import {
@@ -26,6 +29,7 @@ import type { ReadyProbe } from "../../src/runner/types";
 const tempDirectories: string[] = [];
 
 afterEach(async () => {
+  vi.unstubAllEnvs();
   await cleanupTempDirectories(tempDirectories);
 });
 
@@ -69,22 +73,38 @@ describe("execObsidian", () => {
     expect(calls[0]?.args).toEqual(["vault=v", "eval", "code=1"]);
     expect(calls[0]?.options?.env?.HOME).toBe("/tmp/profile/home");
   });
+
+  test("on Linux the CLI reaches the private socket even with XDG_RUNTIME_DIR set", async () => {
+    vi.stubEnv("XDG_RUNTIME_DIR", "/run/user/1000");
+    const { execFile, calls } = makeExec(() => ok(""));
+
+    await execObsidian(vaultTarget, ["vault=v", "eval", "code=1"], {
+      execFile,
+      platform: "linux",
+    });
+
+    expect(linuxCliSocket(calls[0]?.options?.env)).toBe(cliSocketPath(vaultTarget));
+  });
 });
+
+async function makeLaunchTarget(obsidianApp: string): Promise<LaunchTarget> {
+  const profileRoot = await createTempDir(tempDirectories, "profile-root-");
+  const instancePath = path.join(profileRoot, "instance");
+  return {
+    obsidianApp,
+    obsidianHome: path.join(instancePath, "home"),
+    userDataPath: path.join(instancePath, "home", "data"),
+    profileRoot,
+    instancePath,
+  };
+}
 
 describe("launchObsidianInstance", () => {
   test("opens Obsidian backgrounded with the isolated HOME and user-data-dir", async () => {
-    const profileRoot = await createTempDir(tempDirectories, "profile-root-");
-    const instancePath = path.join(profileRoot, "instance");
-    const target: LaunchTarget = {
-      obsidianApp: "Obsidian",
-      obsidianHome: path.join(instancePath, "home"),
-      userDataPath: path.join(instancePath, "home", "data"),
-      profileRoot,
-      instancePath,
-    };
+    const target = await makeLaunchTarget("Obsidian");
     const { execFile, calls } = makeExec(() => ok(""));
 
-    await launchObsidianInstance(target, { execFile });
+    await launchObsidianInstance(target, { execFile, platform: "darwin" });
 
     expect(calls).toHaveLength(1);
     expect(calls[0]?.file).toBe("/usr/bin/open");
@@ -100,6 +120,60 @@ describe("launchObsidianInstance", () => {
       "--password-store=basic",
     ]);
     expect(calls[0]?.options?.env?.HOME).toBe(target.obsidianHome);
+  });
+
+  test("on Linux without a display, spawns the executable detached under xvfb-run", async () => {
+    vi.stubEnv("DISPLAY", "");
+    vi.stubEnv("WAYLAND_DISPLAY", "wayland-0");
+    vi.stubEnv("XDG_RUNTIME_DIR", "/run/user/1000");
+    const app = path.join(await createTempDir(tempDirectories, "obsidian-install-"), "obsidian");
+    await fs.writeFile(app, "", { mode: 0o755 });
+    const target = await makeLaunchTarget(app);
+    const { execFile, calls } = makeExec(() => ok(""));
+    const spawned: { file: string; args: readonly string[]; env: NodeJS.ProcessEnv }[] = [];
+    const logPaths: string[] = [];
+    const spawnDetached: SpawnDetachedFn = async (file, args, { env, logPath }) => {
+      spawned.push({ file, args, env });
+      logPaths.push(logPath);
+    };
+
+    await launchObsidianInstance(target, { execFile, spawnDetached, platform: "linux" });
+
+    expect(calls).toEqual([]);
+    expect(spawned).toHaveLength(1);
+    expect(spawned[0]?.file).toBe("xvfb-run");
+    expect(spawned[0]?.args).toEqual([
+      "-a",
+      "-s",
+      "-screen 0 3840x3200x24",
+      app,
+      "--no-sandbox",
+      `--user-data-dir=${target.userDataPath}`,
+      "--password-store=basic",
+    ]);
+    expect(spawned[0]?.env.HOME).toBe(target.obsidianHome);
+    expect(spawned[0]?.env.WAYLAND_DISPLAY).toBeUndefined();
+    // The app must listen where the readiness gate looks, not in the shared runtime dir.
+    expect(linuxCliSocket(spawned[0]?.env)).toBe(cliSocketPath(target));
+    expect(logPaths).toEqual([path.join(target.instancePath, "obsidian.log")]);
+  });
+
+  test("on Linux an appName that is not an executable file fails before spawning", async () => {
+    const dir = await createTempDir(tempDirectories, "obsidian-install-");
+    const plainFile = path.join(dir, "obsidian");
+    await fs.writeFile(plainFile, "", { mode: 0o644 });
+    let spawned = 0;
+    const spawnDetached: SpawnDetachedFn = async () => {
+      spawned += 1;
+    };
+
+    for (const app of [path.join(dir, "missing"), dir, plainFile]) {
+      const target = await makeLaunchTarget(app);
+      await expect(
+        launchObsidianInstance(target, { spawnDetached, platform: "linux" }),
+      ).rejects.toThrow(`"${app}" is not an executable file`);
+    }
+    expect(spawned).toBe(0);
   });
 });
 

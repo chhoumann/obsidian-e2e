@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 
@@ -16,7 +17,9 @@ import {
 } from "../../src/runner/cli";
 import { slugify } from "../../src/runner/fs-utils";
 import { stableInstanceId } from "../../src/runner/instance";
+import { cliSocketPath } from "../../src/runner/launch";
 import type { InstanceOptions, ResolvedRunnerConfig } from "../../src/runner/types";
+import { linuxCliSocket } from "../helpers/cli-socket";
 import { cleanupTempDirectories, createTempDir } from "../helpers/create-temp-dir";
 
 const tempDirectories: string[] = [];
@@ -311,6 +314,20 @@ describe("spawnObsidian", () => {
     expect(obsidianCommandArgs("v", ["x"])).toEqual(["vault=v", "x"]);
   });
 
+  test("on Linux the forwarded command reaches the private socket", () => {
+    let env: NodeJS.ProcessEnv | undefined;
+    const spawn: SpawnFn = (file, args, spawnOptions) => {
+      env = spawnOptions.env;
+      return makeSpawn({ code: 0, signal: null })(file, args, spawnOptions);
+    };
+    void spawnObsidian(options, ["eval", "code=1"], {
+      spawn,
+      env: { PATH: "/bin", XDG_RUNTIME_DIR: "/run/user/1000" },
+      exec: { platform: "linux" },
+    });
+    expect(linuxCliSocket(env)).toBe("/tmp/home/.obsidian-cli.sock");
+  });
+
   test("re-raises the child's terminating signal to itself", async () => {
     const raised: NodeJS.Signals[] = [];
     const code = await spawnObsidian(options, ["eval"], {
@@ -330,6 +347,51 @@ describe("spawnObsidian", () => {
       spawn: makeSpawn({ code: 2, signal: null }),
     });
     expect(explicit).toBe(2);
+  });
+});
+
+describe("start --print-env on Linux", () => {
+  test("exports what a shell needs to reach the private socket after exporting HOME", async () => {
+    const worktree = await createTempDir(tempDirectories, "cli-start-");
+    const profileRoot = await createTempDir(tempDirectories, "cli-profile-");
+    const { streams, stdout, stderr } = makeStreams();
+
+    const code = await runObsidianE2ECli(
+      ["start", "--worktree", worktree, "--profile-root", profileRoot, "--print-env"],
+      {
+        cwd: worktree,
+        stdout,
+        stderr,
+        loadRunnerConfig: configLoader({ pluginId: "quickadd" }),
+        ensureObsidianInstance: stubEnsure,
+        reapOrphanedInstances: async () => ({ scanned: 0, reaped: [] }),
+        exec: { platform: "linux" },
+      },
+    );
+
+    expect(code).toBe(0);
+    const exports = streams.out.join("");
+    for (const line of exports.split("\n").filter(Boolean)) {
+      expect(line.startsWith("export ")).toBe(true);
+    }
+    // The documented consumer flow, run in a real shell that starts in a desktop session.
+    const [runtimeDir, home] = execFileSync(
+      "sh",
+      [
+        "-c",
+        'eval "$EXPORTS"; export HOME="$OBSIDIAN_E2E_OBSIDIAN_HOME"; echo "$XDG_RUNTIME_DIR"; echo "$HOME"',
+      ],
+      {
+        encoding: "utf8",
+        env: { PATH: process.env.PATH, XDG_RUNTIME_DIR: "/run/user/1000", EXPORTS: exports },
+      },
+    )
+      .trim()
+      .split("\n");
+    expect(home?.startsWith(profileRoot)).toBe(true);
+    expect(linuxCliSocket({ XDG_RUNTIME_DIR: runtimeDir, HOME: home })).toBe(
+      cliSocketPath({ obsidianHome: home! }),
+    );
   });
 });
 

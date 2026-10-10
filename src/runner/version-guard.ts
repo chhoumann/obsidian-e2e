@@ -1,10 +1,10 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import process from "node:process";
 
+import { defaultObsidianExecutable } from "../capture/launch";
 import { isRecord } from "../core/errors";
-
-const DEFAULT_OBSIDIAN_APP = "Obsidian";
 
 /**
  * Obsidian ships TWO versions: the installer shell (the `.app`, shown in the
@@ -29,6 +29,8 @@ export interface CachedAsar {
 
 export interface ResolveAppVersionOptions {
   obsidianApp?: string;
+  /** Defaults to `process.platform`; picks the config dir and install layout. */
+  platform?: NodeJS.Platform;
   /** Injectable so tests never scan the real host config dir. */
   obsidianConfigDir?: string;
   /** Injectable so tests never read a real ~25MB installer asar. */
@@ -53,17 +55,34 @@ export interface MinAppVersionResult {
   minAppVersion: string;
 }
 
+/** `open -a` takes the `.app` name on macOS; Linux launches the executable itself. */
+export function defaultObsidianApp(platform: NodeJS.Platform = process.platform): string {
+  return platform === "linux" ? defaultObsidianExecutable(platform) : "Obsidian";
+}
+
 export function macObsidianConfigDir(): string {
   return path.join(os.userInfo().homedir, "Library", "Application Support", "obsidian");
+}
+
+export function linuxObsidianConfigDir(): string {
+  const configHome = process.env.XDG_CONFIG_HOME || path.join(os.userInfo().homedir, ".config");
+  return path.join(configHome, "obsidian");
 }
 
 /**
  * Standard install locations only, consulted as the floor when the config dir
  * has no usable cached asar (a fresh machine / CI that never auto-updated). A
  * bundle registered elsewhere with an empty cache resolves to null and the
- * guard then refuses to run blind rather than guess.
+ * guard then refuses to run blind rather than guess. On Linux `obsidianApp` is
+ * the executable, which sits next to its `resources/` directory.
  */
-export function bundledAsarCandidates(obsidianApp: string): string[] {
+export function bundledAsarCandidates(
+  obsidianApp: string,
+  platform: NodeJS.Platform = process.platform,
+): string[] {
+  if (platform === "linux") {
+    return [path.join(path.dirname(obsidianApp), "resources", "obsidian.asar")];
+  }
   const leaf = path.join(`${obsidianApp}.app`, "Contents", "Resources", "obsidian.asar");
   return [path.join("/Applications", leaf), path.join(os.userInfo().homedir, "Applications", leaf)];
 }
@@ -135,8 +154,11 @@ export async function readAsarPackageVersion(asarPath: string): Promise<string |
 export async function resolveObsidianAppVersion(
   options: ResolveAppVersionOptions = {},
 ): Promise<ResolvedAppVersion> {
-  const obsidianApp = options.obsidianApp ?? DEFAULT_OBSIDIAN_APP;
-  const configDir = options.obsidianConfigDir ?? macObsidianConfigDir();
+  const platform = options.platform ?? process.platform;
+  const obsidianApp = options.obsidianApp ?? defaultObsidianApp(platform);
+  const configDir =
+    options.obsidianConfigDir ??
+    (platform === "linux" ? linuxObsidianConfigDir() : macObsidianConfigDir());
 
   const cachedVersions: string[] = [];
   let newestCachedAsar: CachedAsar | null = null;
@@ -159,7 +181,10 @@ export async function resolveObsidianAppVersion(
   }
 
   let installerVersion: string | null = null;
-  const candidates = options.bundledAsarCandidates ?? bundledAsarCandidates(obsidianApp);
+  // Packages expose the Linux executable through symlinks such as /usr/bin/obsidian.
+  const app =
+    platform === "linux" ? await fs.realpath(obsidianApp).catch(() => obsidianApp) : obsidianApp;
+  const candidates = options.bundledAsarCandidates ?? bundledAsarCandidates(app, platform);
   for (const candidate of candidates) {
     installerVersion = await readAsarPackageVersion(candidate);
     if (installerVersion) break;
@@ -234,10 +259,11 @@ export async function assertObsidianMeetsMinAppVersion(
   const { appVersion, installerVersion, configDir } = await resolveObsidianAppVersion(options);
 
   if (!appVersion) {
+    const app = options.obsidianApp ?? defaultObsidianApp(options.platform);
     throw new Error(
       `Could not determine the running Obsidian app version (no obsidian-*.asar in ${configDir} ` +
-        `and no bundled installer asar found). Refusing to run e2e against an unknown build that ` +
-        `may be below the plugin's minAppVersion ${minAppVersion}.`,
+        `and no bundled installer asar found for app "${app}"). Refusing to run e2e against an ` +
+        `unknown build that may be below the plugin's minAppVersion ${minAppVersion}.`,
     );
   }
 

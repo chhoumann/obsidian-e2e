@@ -37,7 +37,7 @@ describe("loadRunnerConfig", () => {
       },
       envPrefix: undefined,
       profileRoot: "/tmp/podnotes-obsidian-e2e",
-      appName: "Obsidian",
+      appName: process.platform === "linux" ? "/opt/Obsidian/obsidian" : "Obsidian",
       obsidianBin: "obsidian",
     });
     // The default probe code must never embed its own match sentinel.

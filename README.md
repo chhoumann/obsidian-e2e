@@ -87,13 +87,27 @@ export default {
   },
   envPrefix: undefined, // e.g. "YOURPLUGIN" to also emit legacy <PREFIX>_E2E_* aliases during migration
   profileRoot: "/tmp/your-plugin-obsidian-e2e", // private profile root
-  appName: "Obsidian", // the .app name passed to `open -a`
+  // appName: the .app name passed to `open -a` ("Obsidian"); on Linux the executable
+  // path ("/opt/Obsidian/obsidian"). Leave it unset in a config shared across platforms.
   obsidianBin: "obsidian", // the obsidian CLI binary
 };
 ```
 
 Requirements are the same as the test helpers: Obsidian installed locally and the
 `obsidian` CLI on `PATH`.
+
+On Linux the runner starts the executable at the `appName` path itself. Installs
+that keep `resources/` next to the executable work (the `.deb` in
+`/opt/Obsidian`, or the extracted tarball); Flatpak and Snap do not.
+Without `$DISPLAY` it runs on a private Xvfb display, so headless hosts need
+`xvfb` and `xauth`. App output goes to `obsidian.log` in the instance directory.
+The version guard reads cached `obsidian-*.asar` files from
+`${XDG_CONFIG_HOME:-~/.config}/obsidian` and the installer's
+`resources/obsidian.asar` next to the executable. Linux Obsidian and its CLI put
+the CLI socket in `$XDG_RUNTIME_DIR` when it is set, so the runner points
+`XDG_RUNTIME_DIR` at the private `HOME` for the app and every CLI call, and
+`start --print-env` exports it. Evaluating that output therefore also changes
+`XDG_RUNTIME_DIR` in your shell, so keep it to a shell dedicated to the e2e run.
 
 ### Subcommands
 
@@ -161,6 +175,7 @@ pace.
 | `OBSIDIAN_E2E_VAULT_PATH`                               | `provision`, `start`       | absolute path to the provisioned vault                 |
 | `OBSIDIAN_E2E_OBSIDIAN_HOME`                            | `start`                    | the private `HOME` for this instance                   |
 | `OBSIDIAN_BIN`                                          | `start`                    | only when a non-default `--obsidian-bin` is set        |
+| `XDG_RUNTIME_DIR`                                       | `start`, on Linux          | the private `HOME`, where the CLI finds the socket     |
 | `<PREFIX>_E2E_VAULT` / `_VAULT_PATH` / `_OBSIDIAN_HOME` | both, when `envPrefix` set | legacy aliases during migration                        |
 
 ### Android (emulator)
@@ -252,8 +267,8 @@ hooks:
 Everything the bin does is available from `obsidian-e2e/runner` for scripts that
 need to orchestrate instances directly - `loadRunnerConfig`,
 `resolveProvisionOptions`, `provisionVault`, `resolveInstanceOptions`,
-`ensureObsidianInstance`, `stopInstance`, `reapOrphanedInstances`,
-`runObsidianE2ECli`, and the supporting types.
+`ensureObsidianInstance`, `guardWarmInstance`, `stopInstance`,
+`reapOrphanedInstances`, `runObsidianE2ECli`, and the supporting types.
 
 ## Screenshots And Recordings (`capture`)
 

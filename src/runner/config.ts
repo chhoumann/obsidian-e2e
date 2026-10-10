@@ -4,6 +4,7 @@ import { pathToFileURL } from "node:url";
 import { isRecord } from "../core/errors";
 import { pathExists } from "./fs-utils";
 import type { ReadyProbe, ResolvedAndroidConfig, ResolvedRunnerConfig } from "./types";
+import { defaultObsidianApp } from "./version-guard";
 
 export const CONFIG_FILE_NAME = "obsidian-e2e.config.mjs";
 
@@ -73,7 +74,7 @@ export function resolveRunnerConfig(
     envPrefix: optionalString(raw.envPrefix, "envPrefix", source),
     profileRoot:
       optionalString(raw.profileRoot, "profileRoot", source) ?? `/tmp/${pluginId}-obsidian-e2e`,
-    appName: optionalString(raw.appName, "appName", source) ?? "Obsidian",
+    appName: optionalString(raw.appName, "appName", source) ?? defaultObsidianApp(),
     obsidianBin: optionalString(raw.obsidianBin, "obsidianBin", source) ?? "obsidian",
     android: resolveAndroidConfig(raw.android, source),
   };
