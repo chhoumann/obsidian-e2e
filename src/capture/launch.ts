@@ -55,7 +55,7 @@ export interface CaptureLaunchCommand {
   env: NodeJS.ProcessEnv;
 }
 
-function defaultObsidianApp(platform: NodeJS.Platform): string {
+export function defaultObsidianExecutable(platform: NodeJS.Platform): string {
   if (platform === "darwin") return "/Applications/Obsidian.app/Contents/MacOS/Obsidian";
   if (platform === "linux") return "/opt/Obsidian/obsidian";
   throw new Error(
@@ -146,7 +146,7 @@ export function captureLaunchCommand(
   const platform = options.platform ?? process.platform;
   const env = options.env ?? process.env;
   const scale = options.scale ?? DEFAULT_CAPTURE_SCALE;
-  const app = options.obsidianApp ?? defaultObsidianApp(platform);
+  const app = options.obsidianApp ?? defaultObsidianExecutable(platform);
   const appArgs = [
     ...(platform === "linux" ? ["--no-sandbox"] : []),
     `--user-data-dir=${profile.userDataPath}`,
@@ -155,15 +155,34 @@ export function captureLaunchCommand(
     `--force-device-scale-factor=${scale}`,
     ...(options.extraArgs ?? []),
   ];
-  const useXvfb = options.xvfb ?? (platform === "linux" && !env.DISPLAY);
-  const childEnv = { ...env, HOME: profile.home };
-  if (!useXvfb) return { file: app, args: appArgs, env: childEnv };
+  return withXvfb(
+    { file: app, args: appArgs, env: { ...env, HOME: profile.home } },
+    { platform, xvfb: options.xvfb, screen: options.screen },
+  );
+}
+
+/**
+ * Run the command inside `xvfb-run` when `xvfb` is set, which defaults to Linux
+ * without `$DISPLAY`. Shared with the runner's Linux launch.
+ */
+export function withXvfb(
+  command: CaptureLaunchCommand,
+  options: { platform: NodeJS.Platform; xvfb?: boolean; screen?: string },
+): CaptureLaunchCommand {
+  const useXvfb = options.xvfb ?? (options.platform === "linux" && !command.env.DISPLAY);
+  if (!useXvfb) return command;
   return {
     file: "xvfb-run",
-    args: ["-a", "-s", `-screen 0 ${options.screen ?? DEFAULT_XVFB_SCREEN}`, app, ...appArgs],
+    args: [
+      "-a",
+      "-s",
+      `-screen 0 ${options.screen ?? DEFAULT_XVFB_SCREEN}`,
+      command.file,
+      ...command.args,
+    ],
     // Marks a private display nothing else draws on: `record --backend auto`
     // only picks x11grab there (see detectX11Target).
-    env: withoutWayland({ ...childEnv, [DEDICATED_DISPLAY_ENV]: "1" }),
+    env: withoutWayland({ ...command.env, [DEDICATED_DISPLAY_ENV]: "1" }),
   };
 }
 
