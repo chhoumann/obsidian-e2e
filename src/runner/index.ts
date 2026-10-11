@@ -88,7 +88,7 @@ export {
   resolveCurrentUid,
 } from "./security";
 export type { SecureDirOptions } from "./security";
-export { ensureObsidianInstance, guardWarmInstance } from "./ensure";
+export { ensureObsidianInstance } from "./ensure";
 export type { EnsureDependencies, EnsureResult } from "./ensure";
 export { obsidianCommandArgs, obsidianEnv, runObsidianE2ECli, spawnObsidian } from "./cli";
 export type { ChildProcessLike, CliDependencies, SpawnFn } from "./cli";

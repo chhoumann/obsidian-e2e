@@ -284,8 +284,8 @@ hooks:
 Everything the bin does is available from `obsidian-e2e/runner` for scripts that
 need to orchestrate instances directly - `loadRunnerConfig`,
 `resolveProvisionOptions`, `provisionVault`, `resolveInstanceOptions`,
-`ensureObsidianInstance`, `guardWarmInstance`, `stopInstance`,
-`reapOrphanedInstances`, `runObsidianE2ECli`, and the supporting types.
+`ensureObsidianInstance`, `stopInstance`, `reapOrphanedInstances`,
+`runObsidianE2ECli`, and the supporting types.
 
 ## Screenshots And Recordings (`capture`)
 

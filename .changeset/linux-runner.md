@@ -27,4 +27,3 @@ can drop their Linux shims.
 - The version guard finds Linux installs: cached asars in
   `${XDG_CONFIG_HOME:-~/.config}/obsidian` and the installer asar in
   `resources/` next to the executable, following symlinks.
-- `obsidian-e2e/runner` now exports `guardWarmInstance`.
