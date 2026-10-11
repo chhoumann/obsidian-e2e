@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 
-import { defaultObsidianExecutable } from "../capture/launch";
+import { defaultObsidianExecutable } from "../core/launch-command";
 import { isRecord } from "../core/errors";
 
 /**

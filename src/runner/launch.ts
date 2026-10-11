@@ -4,7 +4,7 @@ import path from "node:path";
 import process from "node:process";
 import { promisify } from "node:util";
 
-import { withXvfb } from "../capture/launch";
+import { withXvfb } from "../core/launch-command";
 import { commandErrorMessage } from "../core/errors";
 import { privateHomeEnv } from "../env/resolve-env";
 import { ensureSecureDir } from "./security";
