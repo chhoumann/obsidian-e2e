@@ -28,6 +28,10 @@ can drop their Linux shims.
   `HOME`, so its CLI socket no longer collides with a desktop Obsidian. Under
   `xvfb-run` it keeps the Xvfb auth file in that `HOME`, so stopping it no
   longer leaves an `xvfb-run.*` directory in `$TMPDIR`.
+- `captureLaunchCommand` can now return a `cwd`. Callers that spawn the returned
+  command themselves must pass it to `spawn`, because Xvfb resolves its auth file
+  relative to that directory. Custom `SpawnDetachedFn` implementations must also
+  forward `cwd` when supplied.
 - The version guard finds Linux installs: cached asars in
   `${XDG_CONFIG_HOME:-~/.config}/obsidian` and the installer asar in
   `resources/` next to the executable, following symlinks.
