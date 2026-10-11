@@ -9,6 +9,7 @@ import {
   captureLaunchCommand,
   prepareCaptureProfile,
   resolveCaptureProfile,
+  runCaptureInstance,
 } from "../../src/capture/launch";
 import {
   captureScreenshot,
@@ -19,7 +20,9 @@ import {
 } from "../../src/capture/page";
 import { buildConcatList, encoderArgs, startRecording } from "../../src/capture/record";
 import { CdpClient, type CdpSocket } from "../../src/runner/android/cdp";
+import { linuxCliSocket, waylandSocket } from "../helpers/cli-socket";
 import { cleanupTempDirectories, createTempDir } from "../helpers/create-temp-dir";
+import { installXvfbStandIns } from "../helpers/fake-xvfb-run";
 
 const tempDirectories: string[] = [];
 afterEach(async () => {
@@ -128,12 +131,15 @@ describe("capture launch", () => {
     expect(profile.home).toBe("/tmp/obsidian-e2e-capture-9333/home");
     const command = captureLaunchCommand(options, profile);
     expect(command.file).toBe("xvfb-run");
-    expect(command.args.slice(0, 4)).toEqual([
+    expect(command.cwd).toBe(profile.home);
+    expect(command.args.slice(0, 5)).toEqual([
       "-a",
+      "-f",
+      "Xauthority",
       "-s",
       "-screen 0 3840x3200x24",
-      "/opt/Obsidian/obsidian",
     ]);
+    expect(command.args).toContain("/opt/Obsidian/obsidian");
     expect(command.args).toContain("--remote-debugging-port=9333");
     expect(command.args).toContain("--force-device-scale-factor=2");
     expect(command.args).toContain(`--user-data-dir=${profile.home}/.config/obsidian`);
@@ -147,6 +153,60 @@ describe("capture launch", () => {
     expect(underXvfb.file).toBe("xvfb-run");
     expect(underXvfb.env.WAYLAND_DISPLAY).toBeUndefined();
     expect(underXvfb.env.XDG_SESSION_TYPE).toBe("x11");
+  });
+
+  test("linux under xvfb-run, a root with spaces starts the app from the caller's cwd", async () => {
+    const dir = await createTempDir(tempDirectories, "capture-xvfb-");
+    const { app, readLaunch } = await installXvfbStandIns(dir);
+    const vaultPath = path.join(dir, "vault");
+    await fs.mkdir(vaultPath);
+    const options = {
+      vaultPath,
+      root: path.join(dir, "capture root"),
+      platform: "linux" as const,
+      obsidianApp: path.relative(process.cwd(), app),
+      env: { PATH: `${dir}${path.delimiter}${process.env.PATH ?? ""}` },
+    };
+    const profile = await prepareCaptureProfile(options);
+
+    expect(await runCaptureInstance(captureLaunchCommand(options, profile), () => {})).toBe(0);
+
+    const launch = await readLaunch();
+    expect(launch.cwd).toBe(await fs.realpath(process.cwd()));
+    expect(launch.xauthority).toBe(path.join(profile.home, "Xauthority"));
+    await expect(fs.access(launch.xauthority)).resolves.toBeUndefined();
+    expect(launch.args).toContain(`--user-data-dir=${profile.userDataPath}`);
+  });
+
+  test("linux keeps the capture instance's CLI socket in its private HOME", () => {
+    for (const display of [undefined, ":0"]) {
+      const options = {
+        vaultPath: "/v/Demo",
+        platform: "linux" as const,
+        env: { DISPLAY: display, XDG_RUNTIME_DIR: "/run/user/1000" },
+      };
+      const profile = resolveCaptureProfile(options);
+      expect(linuxCliSocket(captureLaunchCommand(options, profile).env)).toBe(
+        path.join(profile.home, ".obsidian-cli.sock"),
+      );
+    }
+  });
+
+  test("--no-xvfb on Linux Wayland reaches the session compositor and a private CLI socket", () => {
+    for (const session of [{ WAYLAND_DISPLAY: "wayland-0" }, { XDG_SESSION_TYPE: "wayland" }]) {
+      const options = {
+        vaultPath: "/v/Demo",
+        platform: "linux" as const,
+        xvfb: false,
+        extraArgs: ["--ozone-platform=wayland"],
+        env: { ...session, XDG_RUNTIME_DIR: "/run/user/1000" },
+      };
+      const profile = resolveCaptureProfile(options);
+      const command = captureLaunchCommand(options, profile);
+      expect(command.file).toBe("/opt/Obsidian/obsidian");
+      expect(waylandSocket(command.env)).toBe("/run/user/1000/wayland-0");
+      expect(linuxCliSocket(command.env)).toBe(path.join(profile.home, ".obsidian-cli.sock"));
+    }
   });
 
   test("an existing DISPLAY or macOS runs the app directly", () => {

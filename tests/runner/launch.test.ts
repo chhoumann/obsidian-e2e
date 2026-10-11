@@ -1,14 +1,18 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 
-import { afterEach, describe, expect, test } from "vite-plus/test";
+import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 
+import { linuxCliSocket } from "../helpers/cli-socket";
 import { cleanupTempDirectories, createTempDir } from "../helpers/create-temp-dir";
+import { installXvfbStandIns } from "../helpers/fake-xvfb-run";
 import type {
   ExecFileFn,
   ExecFileResult,
   ExecFileRunOptions,
   InstanceReadyTarget,
   LaunchTarget,
+  SpawnDetachedFn,
   VaultExecTarget,
 } from "../../src/runner/launch";
 import {
@@ -26,6 +30,7 @@ import type { ReadyProbe } from "../../src/runner/types";
 const tempDirectories: string[] = [];
 
 afterEach(async () => {
+  vi.unstubAllEnvs();
   await cleanupTempDirectories(tempDirectories);
 });
 
@@ -69,22 +74,38 @@ describe("execObsidian", () => {
     expect(calls[0]?.args).toEqual(["vault=v", "eval", "code=1"]);
     expect(calls[0]?.options?.env?.HOME).toBe("/tmp/profile/home");
   });
+
+  test("on Linux the CLI reaches the private socket even with XDG_RUNTIME_DIR set", async () => {
+    vi.stubEnv("XDG_RUNTIME_DIR", "/run/user/1000");
+    const { execFile, calls } = makeExec(() => ok(""));
+
+    await execObsidian(vaultTarget, ["vault=v", "eval", "code=1"], {
+      execFile,
+      platform: "linux",
+    });
+
+    expect(linuxCliSocket(calls[0]?.options?.env)).toBe(cliSocketPath(vaultTarget));
+  });
 });
+
+async function makeLaunchTarget(obsidianApp: string): Promise<LaunchTarget> {
+  const profileRoot = await createTempDir(tempDirectories, "profile-root-");
+  const instancePath = path.join(profileRoot, "instance");
+  return {
+    obsidianApp,
+    obsidianHome: path.join(instancePath, "home"),
+    userDataPath: path.join(instancePath, "home", "Library", "Application Support", "obsidian"),
+    profileRoot,
+    instancePath,
+  };
+}
 
 describe("launchObsidianInstance", () => {
   test("opens Obsidian backgrounded with the isolated HOME and user-data-dir", async () => {
-    const profileRoot = await createTempDir(tempDirectories, "profile-root-");
-    const instancePath = path.join(profileRoot, "instance");
-    const target: LaunchTarget = {
-      obsidianApp: "Obsidian",
-      obsidianHome: path.join(instancePath, "home"),
-      userDataPath: path.join(instancePath, "home", "data"),
-      profileRoot,
-      instancePath,
-    };
+    const target = await makeLaunchTarget("Obsidian");
     const { execFile, calls } = makeExec(() => ok(""));
 
-    await launchObsidianInstance(target, { execFile });
+    await launchObsidianInstance(target, { execFile, platform: "darwin" });
 
     expect(calls).toHaveLength(1);
     expect(calls[0]?.file).toBe("/usr/bin/open");
@@ -100,6 +121,128 @@ describe("launchObsidianInstance", () => {
       "--password-store=basic",
     ]);
     expect(calls[0]?.options?.env?.HOME).toBe(target.obsidianHome);
+  });
+
+  test("on Linux without a display, spawns the executable detached under xvfb-run", async () => {
+    vi.stubEnv("DISPLAY", "");
+    vi.stubEnv("WAYLAND_DISPLAY", "wayland-0");
+    vi.stubEnv("XDG_RUNTIME_DIR", "/run/user/1000");
+    vi.stubEnv("XDG_CONFIG_HOME", "/home/user/.config");
+    const app = path.join(await createTempDir(tempDirectories, "obsidian-install-"), "obsidian");
+    await fs.writeFile(app, "", { mode: 0o755 });
+    const target = await makeLaunchTarget(app);
+    const { execFile, calls } = makeExec(() => ok(""));
+    const spawned: {
+      file: string;
+      args: readonly string[];
+      env: NodeJS.ProcessEnv;
+      cwd?: string;
+    }[] = [];
+    const logPaths: string[] = [];
+    const spawnDetached: SpawnDetachedFn = async (file, args, { env, cwd, logPath }) => {
+      spawned.push({ file, args, env, cwd });
+      logPaths.push(logPath);
+    };
+
+    await launchObsidianInstance(target, { execFile, spawnDetached, platform: "linux" });
+
+    expect(calls).toEqual([]);
+    expect(spawned).toHaveLength(1);
+    expect(spawned[0]?.file).toBe("xvfb-run");
+    expect(spawned[0]?.cwd).toBe(target.instancePath);
+    expect(spawned[0]?.args).toEqual([
+      "-a",
+      "-f",
+      "Xauthority",
+      "-s",
+      "-screen 0 3840x3200x24",
+      "/bin/sh",
+      "-c",
+      expect.any(String),
+      "sh",
+      path.join(target.instancePath, "Xauthority"),
+      process.cwd(),
+      app,
+      "--no-sandbox",
+      "--remote-debugging-port=0",
+      `--user-data-dir=${target.userDataPath}`,
+      "--password-store=basic",
+    ]);
+    expect(spawned[0]?.env.HOME).toBe(target.obsidianHome);
+    expect(spawned[0]?.env.WAYLAND_DISPLAY).toBeUndefined();
+    expect(linuxCliSocket(spawned[0]?.env)).toBe(cliSocketPath(target));
+    const { XDG_CONFIG_HOME, HOME } = spawned[0]?.env ?? {};
+    expect(path.join(XDG_CONFIG_HOME || path.join(HOME ?? "", ".config"), "obsidian")).toBe(
+      target.userDataPath,
+    );
+    expect(process.env.XDG_CONFIG_HOME).toBe("/home/user/.config");
+    expect(logPaths).toEqual([path.join(target.instancePath, "obsidian.log")]);
+  });
+
+  test("on Linux under xvfb-run a profile root with spaces starts the app from the caller's cwd", async () => {
+    const dir = await createTempDir(tempDirectories, "xvfb-run-");
+    const { app, readLaunch } = await installXvfbStandIns(dir);
+    vi.stubEnv("PATH", `${dir}${path.delimiter}${process.env.PATH ?? ""}`);
+    vi.stubEnv("DISPLAY", "");
+    const profileRoot = path.join(dir, "profile root");
+    const instancePath = path.join(profileRoot, "instance");
+    const target: LaunchTarget = {
+      obsidianApp: path.relative(process.cwd(), app),
+      obsidianHome: path.join(instancePath, "home"),
+      userDataPath: path.join(instancePath, "home", ".config", "obsidian"),
+      profileRoot,
+      instancePath,
+    };
+
+    await launchObsidianInstance(target, { platform: "linux" });
+
+    const launch = await vi.waitFor(readLaunch, { timeout: 5_000 });
+    expect(launch.cwd).toBe(await fs.realpath(process.cwd()));
+    expect(launch.xauthority).toBe(path.join(instancePath, "Xauthority"));
+    await expect(fs.access(launch.xauthority)).resolves.toBeUndefined();
+    expect(launch.args).toContain(`--user-data-dir=${target.userDataPath}`);
+  });
+
+  test("on Linux an appName that is not an executable file fails before spawning", async () => {
+    const dir = await createTempDir(tempDirectories, "obsidian-install-");
+    const plainFile = path.join(dir, "obsidian");
+    await fs.writeFile(plainFile, "", { mode: 0o644 });
+    let spawned = 0;
+    const spawnDetached: SpawnDetachedFn = async () => {
+      spawned += 1;
+    };
+
+    for (const app of [path.join(dir, "missing"), dir, plainFile]) {
+      const target = await makeLaunchTarget(app);
+      await expect(
+        launchObsidianInstance(target, { spawnDetached, platform: "linux" }),
+      ).rejects.toThrow(`"${app}" is not an executable file`);
+    }
+    expect(spawned).toBe(0);
+  });
+
+  test("on Linux a CLI socket path over 107 bytes fails before spawning", async () => {
+    const app = path.join(await createTempDir(tempDirectories, "obsidian-install-"), "obsidian");
+    await fs.writeFile(app, "", { mode: 0o755 });
+    const spawned: string[] = [];
+    const spawnDetached: SpawnDetachedFn = async (file) => {
+      spawned.push(file);
+    };
+    const launchWithHome = async (obsidianHome: string) =>
+      launchObsidianInstance(
+        { ...(await makeLaunchTarget(app)), obsidianHome },
+        { spawnDetached, platform: "linux" },
+      );
+    const maxHomeBytes = 107 - Buffer.byteLength("/.obsidian-cli.sock");
+    const multibyteHome = `/é${"a".repeat(maxHomeBytes - 2)}`;
+    expect(cliSocketPath({ obsidianHome: multibyteHome })).toHaveLength(107);
+
+    await launchWithHome(`/${"a".repeat(maxHomeBytes - 1)}`);
+    expect(spawned).toHaveLength(1);
+    const tooLong = /is 108 bytes, but Linux allows at most 107\. Shorten profileRoot/;
+    await expect(launchWithHome(`/${"a".repeat(maxHomeBytes)}`)).rejects.toThrow(tooLong);
+    await expect(launchWithHome(multibyteHome)).rejects.toThrow(tooLong);
+    expect(spawned).toHaveLength(1);
   });
 });
 

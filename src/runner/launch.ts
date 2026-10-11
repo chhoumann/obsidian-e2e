@@ -1,10 +1,12 @@
-import { execFile as execFileCb } from "node:child_process";
+import { execFile as execFileCb, spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { promisify } from "node:util";
 
+import { withXvfb } from "../core/launch-command";
 import { commandErrorMessage } from "../core/errors";
+import { privateHomeEnv } from "../env/resolve-env";
 import { ensureSecureDir } from "./security";
 import type { ReadyProbe } from "./types";
 
@@ -14,6 +16,8 @@ const DEFAULT_READY_TIMEOUT_MS = 30_000;
 const DEFAULT_READY_INTERVAL_MS = 500;
 const READY_PROBE_TIMEOUT_MS = 5_000;
 const CLI_SOCKET_FILE = ".obsidian-cli.sock";
+// sockaddr_un.sun_path holds 108 bytes, including the terminating NUL.
+const MAX_LINUX_SOCKET_PATH_BYTES = 107;
 
 export interface ExecFileResult {
   stdout: string;
@@ -32,14 +36,17 @@ export type ExecFileFn = (
   options?: ExecFileRunOptions,
 ) => Promise<ExecFileResult>;
 
-/**
- * All side effects the launcher performs are injected through this object so the
- * whole module is testable with fakes: `execFile` (the child-process boundary),
- * `socketExists` (the CLI-socket probe), and the timing primitives plus the poll
- * bounds (`timeoutMs`/`intervalMs`) so timeout paths run instantly under test.
- */
+/** Start a process that outlives this one, with its output appended to `logPath`. */
+export type SpawnDetachedFn = (
+  file: string,
+  args: readonly string[],
+  options: { env: NodeJS.ProcessEnv; cwd?: string; logPath: string },
+) => Promise<void>;
+
 export interface ObsidianExecDependencies {
   execFile?: ExecFileFn;
+  spawnDetached?: SpawnDetachedFn;
+  platform?: NodeJS.Platform;
   socketExists?: (socketPath: string) => Promise<boolean>;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
@@ -79,6 +86,34 @@ const defaultExecFile: ExecFileFn = async (file, args, options = {}) => {
   return { stdout, stderr };
 };
 
+const defaultSpawnDetached: SpawnDetachedFn = async (file, args, { env, cwd, logPath }) => {
+  const log = await fs.open(logPath, "a", 0o600);
+  try {
+    const child = spawn(file, [...args], {
+      detached: true,
+      env,
+      cwd,
+      stdio: ["ignore", log.fd, log.fd],
+    });
+    await new Promise<void>((resolve, reject) => {
+      child.once("spawn", resolve);
+      child.once("error", reject);
+    });
+    child.unref();
+  } finally {
+    await log.close();
+  }
+};
+
+async function isExecutableFile(file: string): Promise<boolean> {
+  try {
+    await fs.access(file, fs.constants.X_OK);
+    return (await fs.stat(file)).isFile();
+  } catch {
+    return false;
+  }
+}
+
 const defaultSocketExists = async (socketPath: string): Promise<boolean> => {
   try {
     await fs.lstat(socketPath);
@@ -106,8 +141,15 @@ function resolveSleep(deps?: ObsidianExecDependencies): (ms: number) => Promise<
   return deps?.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
 }
 
-function obsidianEnv(target: { obsidianHome: string }): NodeJS.ProcessEnv {
-  return { ...process.env, HOME: target.obsidianHome };
+function resolvePlatform(deps?: ObsidianExecDependencies): NodeJS.Platform {
+  return deps?.platform ?? process.platform;
+}
+
+function obsidianEnv(
+  target: { obsidianHome: string },
+  deps?: ObsidianExecDependencies,
+): NodeJS.ProcessEnv {
+  return privateHomeEnv(target.obsidianHome, process.env, resolvePlatform(deps));
 }
 
 /** Run the `obsidian` CLI against the isolated HOME, UTF-8 decoded. */
@@ -119,7 +161,7 @@ export async function execObsidian(
 ): Promise<ExecFileResult> {
   return resolveExec(deps)(target.obsidianBin, args, {
     encoding: "utf8",
-    env: obsidianEnv(target),
+    env: obsidianEnv(target, deps),
     ...execOptions,
   });
 }
@@ -154,6 +196,47 @@ export async function launchObsidianInstance(
   await ensureSecureDir(target.profileRoot, secureOptions);
   await ensureSecureDir(target.instancePath, secureOptions);
 
+  const platform = resolvePlatform(deps);
+  if (platform === "linux") {
+    if (!(await isExecutableFile(target.obsidianApp))) {
+      throw new Error(
+        `"${target.obsidianApp}" is not an executable file. On Linux set appName ` +
+          `(or --obsidian-app) to the path of the Obsidian executable.`,
+      );
+    }
+    const socketPath = cliSocketPath(target);
+    const socketBytes = Buffer.byteLength(socketPath);
+    if (socketBytes > MAX_LINUX_SOCKET_PATH_BYTES) {
+      throw new Error(
+        `The CLI socket path ${socketPath} is ${socketBytes} bytes, but Linux allows at most ` +
+          `${MAX_LINUX_SOCKET_PATH_BYTES}. Shorten profileRoot (--profile-root) or the vault ` +
+          `name (--vault).`,
+      );
+    }
+    const command = withXvfb(
+      {
+        file: target.obsidianApp,
+        args: [
+          "--no-sandbox",
+          "--remote-debugging-port=0",
+          `--user-data-dir=${target.userDataPath}`,
+          "--password-store=basic",
+        ],
+        // An obsidian:// link relaunches the executable without --user-data-dir, so
+        // Electron derives the profile from XDG_CONFIG_HOME. Pointing it here lets that
+        // relaunch find this instance's single-instance lock and hand the link over.
+        env: { ...obsidianEnv(target, deps), XDG_CONFIG_HOME: path.dirname(target.userDataPath) },
+      },
+      { platform, authDir: target.instancePath },
+    );
+    await (deps?.spawnDetached ?? defaultSpawnDetached)(command.file, command.args, {
+      env: command.env,
+      cwd: command.cwd,
+      logPath: path.join(target.instancePath, "obsidian.log"),
+    });
+    return;
+  }
+
   await resolveExec(deps)(
     "/usr/bin/open",
     [
@@ -167,7 +250,7 @@ export async function launchObsidianInstance(
       `--user-data-dir=${target.userDataPath}`,
       "--password-store=basic",
     ],
-    { env: obsidianEnv(target) },
+    { env: obsidianEnv(target, deps) },
   );
 }
 

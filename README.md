@@ -87,13 +87,54 @@ export default {
   },
   envPrefix: undefined, // e.g. "YOURPLUGIN" to also emit legacy <PREFIX>_E2E_* aliases during migration
   profileRoot: "/tmp/your-plugin-obsidian-e2e", // private profile root
-  appName: "Obsidian", // the .app name passed to `open -a`
+  // appName: the .app name passed to `open -a` ("Obsidian"); on Linux the executable
+  // path ("/opt/Obsidian/obsidian"). Leave it unset in a config shared across platforms.
   obsidianBin: "obsidian", // the obsidian CLI binary
 };
 ```
 
 Requirements are the same as the test helpers: Obsidian installed locally and the
 `obsidian` CLI on `PATH`.
+
+On Linux the runner launches the Obsidian executable itself, on headless hosts
+too:
+
+- `appName` (or `--obsidian-app`) is the path to the executable, default
+  `/opt/Obsidian/obsidian`. A symlink such as `/usr/bin/obsidian` works. The
+  install must keep `resources/` next to the executable, like the `.deb` in
+  `/opt/Obsidian` or the extracted tarball. Flatpak and Snap do not work.
+- `obsidianBin` must be the `obsidian-cli` client next to the executable, not
+  the executable that `appName` names. The `.deb` links `/usr/bin/obsidian` to
+  the executable, so a bare `obsidian` can resolve to the app. Under Settings >
+  General > Advanced, enable "Command line interface", then use "Set up CLI to
+  work in the terminal". It copies the client to `~/.local/bin/obsidian`, which
+  must come before `/usr/bin` on `PATH`. Or set
+  `obsidianBin: "/opt/Obsidian/obsidian-cli"`.
+- Without `$DISPLAY` the app runs on a private Xvfb display, so headless hosts
+  need `xvfb` and `xauth`. App output goes to `obsidian.log` in the instance
+  directory.
+- The version guard reads cached `obsidian-*.asar` files from
+  `${XDG_CONFIG_HOME:-~/.config}/obsidian` and the installer's
+  `resources/obsidian.asar` next to the executable.
+- Linux Obsidian and its CLI put the CLI socket in `$XDG_RUNTIME_DIR` when it is
+  set. The runner points `HOME` and `XDG_RUNTIME_DIR` at the private `HOME` only
+  in the processes it starts: the app, its own CLI calls, the command `run`
+  forwards, and clients built with `resolveObsidianEnvOptions`.
+  `start --print-env` leaves `XDG_RUNTIME_DIR` in your shell alone, so a bare
+  `obsidian` command there does not reach the instance. Use `run` instead.
+- The CLI socket path, `<profileRoot>/<vault>-<hash>/home/.obsidian-cli.sock`,
+  must fit in the 107 bytes Linux allows. If it does not, `start` fails before
+  it launches anything. Shorten `profileRoot` or the vault name.
+- The app starts with `--remote-debugging-port=0`. Chromium picks a free
+  DevTools port and writes it as the first line of `DevToolsActivePort` in
+  `home/Library/Application Support/obsidian` under the instance directory.
+  Pass that port to `capture` with `--port` or `OBSIDIAN_E2E_CDP_PORT`. This
+  DevTools endpoint is an unauthenticated localhost debugging port, intended
+  for trusted local test environments.
+- The app runs with `XDG_CONFIG_HOME` set to `home/Library/Application Support`
+  under the instance directory. An `obsidian://` link opened from inside the app
+  relaunches the executable without `--user-data-dir`. The relaunch then finds
+  the running instance and hands it the link instead of starting a second app.
 
 ### Subcommands
 
@@ -314,7 +355,8 @@ obsidian-e2e provision --root /tmp/capture --vault Demo
 eval "$(obsidian-e2e capture launch --vault /tmp/capture/Demo --print-env)"
 amp orb service start obsidian-capture \
   --command "$PWD/node_modules/.bin/obsidian-e2e capture launch --vault /tmp/capture/Demo"   # or tmux/terminal
-HOME=$OBSIDIAN_E2E_CAPTURE_HOME obsidian vault=Demo plugins:restrict off # enable community plugins
+HOME=$OBSIDIAN_E2E_CAPTURE_HOME XDG_RUNTIME_DIR=$OBSIDIAN_E2E_CAPTURE_HOME \
+  obsidian vault=Demo plugins:restrict off # enable community plugins
 
 obsidian-e2e capture prepare --width 1280 --height 800 --scale 2 \
   --theme light --font Inter --hide-secret-warning

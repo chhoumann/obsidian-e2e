@@ -1,13 +1,15 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import { afterEach, describe, expect, test } from "vite-plus/test";
+import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 
 import { buildAsar, makeConfigDir, makeWorktreeWithManifest } from "../helpers/asar";
 import { cleanupTempDirectories, createTempDir } from "../helpers/create-temp-dir";
 import {
   assertObsidianMeetsMinAppVersion,
+  bundledAsarCandidates,
   compareObsidianVersions,
+  defaultObsidianApp,
   reconcileSandboxAppAsar,
   resolveObsidianAppVersion,
 } from "../../src/runner/version-guard";
@@ -15,6 +17,7 @@ import {
 const tempDirectories: string[] = [];
 
 afterEach(async () => {
+  vi.unstubAllEnvs();
   await cleanupTempDirectories(tempDirectories);
 });
 
@@ -67,6 +70,50 @@ describe("resolveObsidianAppVersion", () => {
       bundledAsarCandidates: [path.join(configDir, "does-not-exist.asar")],
     });
     expect(resolved.appVersion).toBeNull();
+  });
+
+  test("on Linux reads the installer asar next to the real executable behind a symlink", async () => {
+    const installDir = await createTempDir(tempDirectories, "obsidian-install-");
+    await fs.mkdir(path.join(installDir, "resources"));
+    await fs.writeFile(path.join(installDir, "resources", "obsidian.asar"), buildAsar("1.13.7"));
+    await fs.writeFile(path.join(installDir, "obsidian"), "", { mode: 0o755 });
+    const binDir = await createTempDir(tempDirectories, "bin-");
+    await fs.symlink(path.join(installDir, "obsidian"), path.join(binDir, "obsidian"));
+    const resolved = await resolveObsidianAppVersion({
+      platform: "linux",
+      obsidianApp: path.join(binDir, "obsidian"),
+      obsidianConfigDir: await makeConfigDir(tempDirectories, []),
+    });
+    expect(resolved.installerVersion).toBe("1.13.7");
+    expect(resolved.appVersion).toBe("1.13.7");
+  });
+
+  test("on macOS defaults to the app name that open -a takes", () => {
+    expect(defaultObsidianApp("darwin")).toBe("Obsidian");
+  });
+
+  test("on Linux defaults to the standard /opt install", () => {
+    expect(bundledAsarCandidates(defaultObsidianApp("linux"), "linux")).toEqual([
+      "/opt/Obsidian/resources/obsidian.asar",
+    ]);
+  });
+
+  test("on Linux finds cached asars under $XDG_CONFIG_HOME/obsidian", async () => {
+    const configHome = await createTempDir(tempDirectories, "xdg-config-");
+    await fs.mkdir(path.join(configHome, "obsidian"));
+    await fs.writeFile(
+      path.join(configHome, "obsidian", "obsidian-1.13.7.asar"),
+      buildAsar("1.13.7"),
+    );
+    vi.stubEnv("XDG_CONFIG_HOME", configHome);
+    const resolved = await resolveObsidianAppVersion({
+      platform: "linux",
+      bundledAsarCandidates: [],
+    });
+    expect(resolved.appVersion).toBe("1.13.7");
+    expect(resolved.newestCachedAsar?.path).toBe(
+      path.join(configHome, "obsidian", "obsidian-1.13.7.asar"),
+    );
   });
 
   test("skips a partial/corrupt cached asar instead of trusting its filename", async () => {
@@ -190,9 +237,11 @@ describe("assertObsidianMeetsMinAppVersion", () => {
     await expect(
       assertObsidianMeetsMinAppVersion({
         worktreePath,
+        obsidianApp: "Obsidian",
+        platform: "darwin",
         obsidianConfigDir: configDir,
         bundledAsarCandidates: [],
       }),
-    ).rejects.toThrow(/Could not determine the running Obsidian app version/);
+    ).rejects.toThrow(/Could not determine the running Obsidian app version .* for app "Obsidian"/);
   });
 });

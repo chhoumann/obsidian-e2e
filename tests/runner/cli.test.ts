@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 
@@ -17,6 +18,7 @@ import {
 import { slugify } from "../../src/runner/fs-utils";
 import { stableInstanceId } from "../../src/runner/instance";
 import type { InstanceOptions, ResolvedRunnerConfig } from "../../src/runner/types";
+import { linuxCliSocket } from "../helpers/cli-socket";
 import { cleanupTempDirectories, createTempDir } from "../helpers/create-temp-dir";
 
 const tempDirectories: string[] = [];
@@ -311,6 +313,20 @@ describe("spawnObsidian", () => {
     expect(obsidianCommandArgs("v", ["x"])).toEqual(["vault=v", "x"]);
   });
 
+  test("on Linux the forwarded command reaches the private socket", () => {
+    let env: NodeJS.ProcessEnv | undefined;
+    const spawn: SpawnFn = (file, args, spawnOptions) => {
+      env = spawnOptions.env;
+      return makeSpawn({ code: 0, signal: null })(file, args, spawnOptions);
+    };
+    void spawnObsidian(options, ["eval", "code=1"], {
+      spawn,
+      env: { PATH: "/bin", XDG_RUNTIME_DIR: "/run/user/1000" },
+      exec: { platform: "linux" },
+    });
+    expect(linuxCliSocket(env)).toBe("/tmp/home/.obsidian-cli.sock");
+  });
+
   test("re-raises the child's terminating signal to itself", async () => {
     const raised: NodeJS.Signals[] = [];
     const code = await spawnObsidian(options, ["eval"], {
@@ -330,6 +346,53 @@ describe("spawnObsidian", () => {
       spawn: makeSpawn({ code: 2, signal: null }),
     });
     expect(explicit).toBe(2);
+  });
+});
+
+describe("start --print-env", () => {
+  test("exports only instance names, so eval leaves the shell's XDG_RUNTIME_DIR alone", async () => {
+    const worktree = await createTempDir(tempDirectories, "cli-start-");
+    const profileRoot = await createTempDir(tempDirectories, "cli-profile-");
+    const { streams, stdout, stderr } = makeStreams();
+
+    const code = await runObsidianE2ECli(
+      ["start", "--worktree", worktree, "--profile-root", profileRoot, "--print-env"],
+      {
+        cwd: worktree,
+        stdout,
+        stderr,
+        loadRunnerConfig: configLoader({ pluginId: "quickadd", envPrefix: "QUICKADD" }),
+        ensureObsidianInstance: stubEnsure,
+        reapOrphanedInstances: async () => ({ scanned: 0, reaped: [] }),
+        exec: { platform: "linux" },
+      },
+    );
+
+    expect(code).toBe(0);
+    const exports = streams.out.join("");
+    const names = exports
+      .trim()
+      .split("\n")
+      .map((line) => /^export ([A-Z0-9_]+)='[^']*'$/.exec(line)?.[1] ?? line);
+    expect(names.sort()).toEqual([
+      "OBSIDIAN_E2E_OBSIDIAN_HOME",
+      "OBSIDIAN_E2E_VAULT",
+      "OBSIDIAN_E2E_VAULT_PATH",
+      "QUICKADD_E2E_OBSIDIAN_HOME",
+      "QUICKADD_E2E_VAULT",
+      "QUICKADD_E2E_VAULT_PATH",
+    ]);
+    for (const runtimeDir of ["/run/user/1000", undefined]) {
+      const after = execFileSync(
+        "sh",
+        ["-c", 'eval "$EXPORTS"; printf %s "${XDG_RUNTIME_DIR-unset}"'],
+        {
+          encoding: "utf8",
+          env: { PATH: process.env.PATH, EXPORTS: exports, XDG_RUNTIME_DIR: runtimeDir },
+        },
+      );
+      expect(after).toBe(runtimeDir ?? "unset");
+    }
   });
 });
 

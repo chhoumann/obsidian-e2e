@@ -5,14 +5,14 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 
+import { defaultObsidianExecutable, type LaunchCommand, withXvfb } from "../core/launch-command";
+import { privateHomeEnv } from "../env/resolve-env";
 import { toShellExports, writeJson } from "../runner/fs-utils";
 import { ensureSecureDir } from "../runner/security";
 
 export const DEFAULT_CDP_PORT = 9333;
 export const DEFAULT_CAPTURE_SCALE = 2;
-export const DEFAULT_XVFB_SCREEN = "3840x3200x24";
-/** Set in the app's environment when it runs on a private Xvfb display. */
-export const DEDICATED_DISPLAY_ENV = "OBSIDIAN_E2E_CAPTURE_XVFB";
+export { DEFAULT_XVFB_SCREEN } from "../core/launch-command";
 
 /**
  * A dedicated, disposable capture instance: its own HOME/profile, a CDP port,
@@ -49,26 +49,8 @@ export interface CaptureProfile {
   warnings: string[];
 }
 
-export interface CaptureLaunchCommand {
-  file: string;
-  args: string[];
-  env: NodeJS.ProcessEnv;
-}
+export type CaptureLaunchCommand = LaunchCommand;
 
-function defaultObsidianApp(platform: NodeJS.Platform): string {
-  if (platform === "darwin") return "/Applications/Obsidian.app/Contents/MacOS/Obsidian";
-  if (platform === "linux") return "/opt/Obsidian/obsidian";
-  throw new Error(
-    `No default Obsidian executable for ${platform} (untested platform); pass --obsidian-app <path>`,
-  );
-}
-
-/**
- * obsidian.json vault key (16 hex of the path hash, like the runner's). Kept
- * local on purpose: importing runner/instance would drag version-guard into a
- * chunk shared with this entry and split the runner bundle, which downstream
- * Linux bridge patches rely on staying in one chunk.
- */
 function captureVaultId(vaultPath: string): string {
   return crypto.createHash("sha256").update(path.resolve(vaultPath)).digest("hex").slice(0, 16);
 }
@@ -91,9 +73,9 @@ export function resolveCaptureProfile(
 
 /**
  * Create the private profile and register the vault as the one open vault (with
- * the CLI enabled so `HOME=<home> obsidian vault=<name> ...` also works). Never
- * writes inside the vault; it only reports vault config that commonly spoils
- * captures.
+ * the CLI enabled so `HOME=<home> XDG_RUNTIME_DIR=<home> obsidian vault=<name> ...`
+ * also works). Never writes inside the vault; it only reports vault config that
+ * commonly spoils captures.
  */
 export async function prepareCaptureProfile(
   options: CaptureLaunchOptions,
@@ -146,7 +128,7 @@ export function captureLaunchCommand(
   const platform = options.platform ?? process.platform;
   const env = options.env ?? process.env;
   const scale = options.scale ?? DEFAULT_CAPTURE_SCALE;
-  const app = options.obsidianApp ?? defaultObsidianApp(platform);
+  const app = options.obsidianApp ?? defaultObsidianExecutable(platform);
   const appArgs = [
     ...(platform === "linux" ? ["--no-sandbox"] : []),
     `--user-data-dir=${profile.userDataPath}`,
@@ -155,22 +137,15 @@ export function captureLaunchCommand(
     `--force-device-scale-factor=${scale}`,
     ...(options.extraArgs ?? []),
   ];
-  const useXvfb = options.xvfb ?? (platform === "linux" && !env.DISPLAY);
-  const childEnv = { ...env, HOME: profile.home };
-  if (!useXvfb) return { file: app, args: appArgs, env: childEnv };
-  return {
-    file: "xvfb-run",
-    args: ["-a", "-s", `-screen 0 ${options.screen ?? DEFAULT_XVFB_SCREEN}`, app, ...appArgs],
-    // Marks a private display nothing else draws on: `record --backend auto`
-    // only picks x11grab there (see detectX11Target).
-    env: withoutWayland({ ...childEnv, [DEDICATED_DISPLAY_ENV]: "1" }),
-  };
-}
-
-/** Under Xvfb the app must not see (or prefer) an outer Wayland session. */
-function withoutWayland(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  const { WAYLAND_DISPLAY: _wayland, WAYLAND_SOCKET: _socket, ...rest } = env;
-  return { ...rest, XDG_SESSION_TYPE: "x11" };
+  return withXvfb(
+    { file: app, args: appArgs, env: privateHomeEnv(profile.home, env, platform) },
+    {
+      platform,
+      xvfb: options.xvfb,
+      screen: options.screen,
+      authDir: profile.home,
+    },
+  );
 }
 
 export function captureShellExports(profile: Omit<CaptureProfile, "warnings">): string {
@@ -197,6 +172,7 @@ export async function runCaptureInstance(
   const group = process.platform !== "win32";
   const child = spawn(command.file, command.args, {
     env: command.env,
+    cwd: command.cwd,
     stdio: "inherit",
     detached: group,
   });

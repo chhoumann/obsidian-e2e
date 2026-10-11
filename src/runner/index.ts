@@ -34,6 +34,7 @@ export {
   assertObsidianMeetsMinAppVersion,
   bundledAsarCandidates,
   compareObsidianVersions,
+  linuxObsidianConfigDir,
   macObsidianConfigDir,
   readAsarPackageVersion,
   reconcileSandboxAppAsar,
@@ -64,6 +65,7 @@ export type {
   LaunchTarget,
   ObsidianExecDependencies,
   ObsidianExecTarget,
+  SpawnDetachedFn,
   VaultExecTarget,
 } from "./launch";
 export {

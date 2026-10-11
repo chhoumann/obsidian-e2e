@@ -88,7 +88,9 @@ describe("resolveInstanceOptions", () => {
       path.join(options.obsidianHome, "Library", "Application Support", "obsidian"),
     );
     // Defaults come from the resolved config; launch defaults to true.
-    expect(options.obsidianApp).toBe("Obsidian");
+    expect(options.obsidianApp).toBe(
+      process.platform === "linux" ? "/opt/Obsidian/obsidian" : "Obsidian",
+    );
     expect(options.obsidianBin).toBe("obsidian");
     expect(makeInstanceOptions(cwd, {}).launch).toBe(false);
   });
