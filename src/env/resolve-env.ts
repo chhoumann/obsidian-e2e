@@ -90,8 +90,7 @@ export function privateHomeEnv(
 
 /**
  * Wayland clients resolve a relative `WAYLAND_DISPLAY` (default `wayland-0`)
- * inside `$XDG_RUNTIME_DIR`, so anchor it to the inherited one before the
- * private HOME replaces it.
+ * inside `$XDG_RUNTIME_DIR`.
  */
 function inheritedWaylandDisplay(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const display =

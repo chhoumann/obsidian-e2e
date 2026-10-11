@@ -51,7 +51,6 @@ export interface CaptureProfile {
 
 export type CaptureLaunchCommand = LaunchCommand;
 
-/** obsidian.json vault key (16 hex of the path hash, like the runner's). */
 function captureVaultId(vaultPath: string): string {
   return crypto.createHash("sha256").update(path.resolve(vaultPath)).digest("hex").slice(0, 16);
 }
