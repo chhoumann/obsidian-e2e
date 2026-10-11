@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { resolveObsidianEnvOptions, verifyVaultPath } from "../../src/env/resolve-env";
-import { linuxCliSocket } from "../helpers/cli-socket";
+import {
+  privateHomeEnv,
+  resolveObsidianEnvOptions,
+  verifyVaultPath,
+} from "../../src/env/resolve-env";
+import { linuxCliSocket, waylandSocket } from "../helpers/cli-socket";
 
 describe("resolveObsidianEnvOptions", () => {
   it("maps the canonical OBSIDIAN_E2E_* names", () => {
@@ -86,6 +90,36 @@ describe("resolveObsidianEnvOptions", () => {
 
     expect(resolved.vault).toBe("scratch");
     expect(resolved.bin).toBe("custom");
+  });
+});
+
+describe("privateHomeEnv", () => {
+  it("on Linux keeps Wayland clients on the session compositor while the CLI socket moves", () => {
+    const cases = [
+      [{ WAYLAND_DISPLAY: "wayland-1" }, "/run/user/1000/wayland-1"],
+      [{ XDG_SESSION_TYPE: "wayland" }, "/run/user/1000/wayland-0"],
+      [{ WAYLAND_DISPLAY: "/run/compositor/wl" }, "/run/compositor/wl"],
+    ] as const;
+    for (const [session, compositor] of cases) {
+      const env = { ...session, XDG_RUNTIME_DIR: "/run/user/1000" };
+      const inherited = { ...env };
+
+      const scoped = privateHomeEnv("/home/e2e", env, "linux");
+
+      expect(waylandSocket(scoped)).toBe(compositor);
+      expect(linuxCliSocket(scoped)).toBe("/home/e2e/.obsidian-cli.sock");
+      expect(env).toEqual(inherited);
+    }
+  });
+
+  it("does not make X11 or headless Linux clients look like Wayland ones", () => {
+    const envs = [
+      { XDG_RUNTIME_DIR: "/run/user/1000" },
+      { DISPLAY: ":0", XDG_SESSION_TYPE: "x11", XDG_RUNTIME_DIR: "/run/user/1000" },
+    ];
+    for (const env of envs) {
+      expect(privateHomeEnv("/home/e2e", env, "linux").WAYLAND_DISPLAY).toBeUndefined();
+    }
   });
 });
 

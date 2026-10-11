@@ -84,8 +84,20 @@ export function privateHomeEnv(
   platform: NodeJS.Platform = process.platform,
 ): NodeJS.ProcessEnv {
   return platform === "linux"
-    ? { ...env, HOME: home, XDG_RUNTIME_DIR: home }
+    ? { ...env, ...inheritedWaylandDisplay(env), HOME: home, XDG_RUNTIME_DIR: home }
     : { ...env, HOME: home };
+}
+
+/**
+ * Wayland clients resolve a relative `WAYLAND_DISPLAY` (default `wayland-0`)
+ * inside `$XDG_RUNTIME_DIR`, so anchor it to the inherited one before the
+ * private HOME replaces it.
+ */
+function inheritedWaylandDisplay(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const display =
+    env.WAYLAND_DISPLAY ?? (env.XDG_SESSION_TYPE === "wayland" ? "wayland-0" : undefined);
+  if (!display || !env.XDG_RUNTIME_DIR || path.isAbsolute(display)) return {};
+  return { WAYLAND_DISPLAY: path.join(env.XDG_RUNTIME_DIR, display) };
 }
 
 export interface VerifyVaultPathOptions {

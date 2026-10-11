@@ -19,7 +19,7 @@ import {
 } from "../../src/capture/page";
 import { buildConcatList, encoderArgs, startRecording } from "../../src/capture/record";
 import { CdpClient, type CdpSocket } from "../../src/runner/android/cdp";
-import { linuxCliSocket } from "../helpers/cli-socket";
+import { linuxCliSocket, waylandSocket } from "../helpers/cli-socket";
 import { cleanupTempDirectories, createTempDir } from "../helpers/create-temp-dir";
 
 const tempDirectories: string[] = [];
@@ -161,6 +161,23 @@ describe("capture launch", () => {
       expect(linuxCliSocket(captureLaunchCommand(options, profile).env)).toBe(
         path.join(profile.home, ".obsidian-cli.sock"),
       );
+    }
+  });
+
+  test("--no-xvfb on Linux Wayland reaches the session compositor and a private CLI socket", () => {
+    for (const session of [{ WAYLAND_DISPLAY: "wayland-0" }, { XDG_SESSION_TYPE: "wayland" }]) {
+      const options = {
+        vaultPath: "/v/Demo",
+        platform: "linux" as const,
+        xvfb: false,
+        extraArgs: ["--ozone-platform=wayland"],
+        env: { ...session, XDG_RUNTIME_DIR: "/run/user/1000" },
+      };
+      const profile = resolveCaptureProfile(options);
+      const command = captureLaunchCommand(options, profile);
+      expect(command.file).toBe("/opt/Obsidian/obsidian");
+      expect(waylandSocket(command.env)).toBe("/run/user/1000/wayland-0");
+      expect(linuxCliSocket(command.env)).toBe(path.join(profile.home, ".obsidian-cli.sock"));
     }
   });
 

@@ -7,3 +7,9 @@ import path from "node:path";
 export function linuxCliSocket(env: NodeJS.ProcessEnv | undefined): string {
   return path.join(env?.XDG_RUNTIME_DIR || env?.HOME || "", ".obsidian-cli.sock");
 }
+
+/** The compositor socket libwayland's `wl_display_connect(NULL)` resolves for an env. */
+export function waylandSocket(env: NodeJS.ProcessEnv | undefined): string {
+  const display = env?.WAYLAND_DISPLAY ?? "wayland-0";
+  return path.isAbsolute(display) ? display : path.join(env?.XDG_RUNTIME_DIR ?? "", display);
+}
