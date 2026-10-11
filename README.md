@@ -118,6 +118,14 @@ too:
 - The CLI socket path, `<profileRoot>/<vault>-<hash>/home/.obsidian-cli.sock`,
   must fit in the 107 bytes Linux allows. If it does not, `start` fails before
   it launches anything. Shorten `profileRoot` or the vault name.
+- The app starts with `--remote-debugging-port=0`. Chromium picks a free
+  DevTools port and writes it as the first line of `DevToolsActivePort` in
+  `home/Library/Application Support/obsidian` under the instance directory.
+  Pass that port to `capture` with `--port` or `OBSIDIAN_E2E_CDP_PORT`.
+- The app runs with `XDG_CONFIG_HOME` set to `home/Library/Application Support`
+  under the instance directory. An `obsidian://` link opened from inside the app
+  relaunches the executable without `--user-data-dir`. The relaunch then finds
+  the running instance and hands it the link instead of starting a second app.
 
 ### Subcommands
 

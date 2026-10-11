@@ -25,6 +25,7 @@ import {
   waitForInstanceReady,
 } from "../../src/runner/launch";
 import type { ReadyProbe } from "../../src/runner/types";
+import { linuxObsidianConfigDir } from "../../src/runner/version-guard";
 
 const tempDirectories: string[] = [];
 
@@ -93,7 +94,7 @@ async function makeLaunchTarget(obsidianApp: string): Promise<LaunchTarget> {
   return {
     obsidianApp,
     obsidianHome: path.join(instancePath, "home"),
-    userDataPath: path.join(instancePath, "home", "data"),
+    userDataPath: path.join(instancePath, "home", "Library", "Application Support", "obsidian"),
     profileRoot,
     instancePath,
   };
@@ -126,6 +127,7 @@ describe("launchObsidianInstance", () => {
     vi.stubEnv("DISPLAY", "");
     vi.stubEnv("WAYLAND_DISPLAY", "wayland-0");
     vi.stubEnv("XDG_RUNTIME_DIR", "/run/user/1000");
+    vi.stubEnv("XDG_CONFIG_HOME", "/home/user/.config");
     const app = path.join(await createTempDir(tempDirectories, "obsidian-install-"), "obsidian");
     await fs.writeFile(app, "", { mode: 0o755 });
     const target = await makeLaunchTarget(app);
@@ -148,6 +150,7 @@ describe("launchObsidianInstance", () => {
       "-screen 0 3840x3200x24",
       app,
       "--no-sandbox",
+      "--remote-debugging-port=0",
       `--user-data-dir=${target.userDataPath}`,
       "--password-store=basic",
     ]);
@@ -155,6 +158,13 @@ describe("launchObsidianInstance", () => {
     expect(spawned[0]?.env.WAYLAND_DISPLAY).toBeUndefined();
     // The app must listen where the readiness gate looks, not in the shared runtime dir.
     expect(linuxCliSocket(spawned[0]?.env)).toBe(cliSocketPath(target));
+    // An obsidian:// relaunch runs without --user-data-dir and must land in this profile.
+    const { XDG_CONFIG_HOME, HOME } = spawned[0]?.env ?? {};
+    expect(path.join(XDG_CONFIG_HOME || path.join(HOME ?? "", ".config"), "obsidian")).toBe(
+      target.userDataPath,
+    );
+    // The version guard keeps reading the host's asar cache.
+    expect(linuxObsidianConfigDir()).toBe("/home/user/.config/obsidian");
     expect(logPaths).toEqual([path.join(target.instancePath, "obsidian.log")]);
   });
 

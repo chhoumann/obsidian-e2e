@@ -17,6 +17,11 @@ can drop their Linux shims.
 - On Linux, `start` and `run` fail before launching when the CLI socket path is
   longer than the 107 bytes Linux allows, and suggest a shorter `profileRoot` or
   vault name. Before, Obsidian could not listen and the runner timed out.
+- On Linux the app starts with `--remote-debugging-port=0`, so `capture` can
+  attach to the port Chromium writes to `DevToolsActivePort` in the user data
+  directory. Its `XDG_CONFIG_HOME` points at its own profile, so an
+  `obsidian://` link opened from inside it reaches the running instance instead
+  of starting a second app.
 - The version guard finds Linux installs: cached asars in
   `${XDG_CONFIG_HOME:-~/.config}/obsidian` and the installer asar in
   `resources/` next to the executable, following symlinks.

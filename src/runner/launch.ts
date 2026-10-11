@@ -225,8 +225,17 @@ export async function launchObsidianInstance(
     const command = withXvfb(
       {
         file: target.obsidianApp,
-        args: ["--no-sandbox", `--user-data-dir=${target.userDataPath}`, "--password-store=basic"],
-        env: obsidianEnv(target, deps),
+        args: [
+          "--no-sandbox",
+          // Chromium picks a free port and writes it to <userDataPath>/DevToolsActivePort.
+          "--remote-debugging-port=0",
+          `--user-data-dir=${target.userDataPath}`,
+          "--password-store=basic",
+        ],
+        // An obsidian:// link relaunches the executable without --user-data-dir, so
+        // Electron derives the profile from XDG_CONFIG_HOME. Pointing it here lets that
+        // relaunch find this instance's single-instance lock and hand the link over.
+        env: { ...obsidianEnv(target, deps), XDG_CONFIG_HOME: path.dirname(target.userDataPath) },
       },
       { platform },
     );
