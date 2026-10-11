@@ -25,7 +25,6 @@ import {
   waitForInstanceReady,
 } from "../../src/runner/launch";
 import type { ReadyProbe } from "../../src/runner/types";
-import { linuxObsidianConfigDir } from "../../src/runner/version-guard";
 
 const tempDirectories: string[] = [];
 
@@ -163,7 +162,7 @@ describe("launchObsidianInstance", () => {
     expect(path.join(XDG_CONFIG_HOME || path.join(HOME ?? "", ".config"), "obsidian")).toBe(
       target.userDataPath,
     );
-    expect(linuxObsidianConfigDir()).toBe("/home/user/.config/obsidian");
+    expect(process.env.XDG_CONFIG_HOME).toBe("/home/user/.config");
     expect(logPaths).toEqual([path.join(target.instancePath, "obsidian.log")]);
   });
 

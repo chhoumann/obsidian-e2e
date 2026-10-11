@@ -88,6 +88,10 @@ describe("resolveObsidianAppVersion", () => {
     expect(resolved.appVersion).toBe("1.13.7");
   });
 
+  test("on macOS defaults to the app name that open -a takes", () => {
+    expect(defaultObsidianApp("darwin")).toBe("Obsidian");
+  });
+
   test("on Linux defaults to the standard /opt install", () => {
     expect(bundledAsarCandidates(defaultObsidianApp("linux"), "linux")).toEqual([
       "/opt/Obsidian/resources/obsidian.asar",
