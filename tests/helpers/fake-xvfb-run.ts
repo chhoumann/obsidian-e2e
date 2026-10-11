@@ -21,10 +21,6 @@ export interface RecordedLaunch {
   args: string[];
 }
 
-/**
- * Puts an `xvfb-run` stand-in in `dir` (prepend it to PATH) and an app that
- * records its working directory, XAUTHORITY and argv.
- */
 export async function installXvfbStandIns(dir: string): Promise<{
   app: string;
   readLaunch: () => Promise<RecordedLaunch>;

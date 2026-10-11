@@ -24,15 +24,12 @@ interface XvfbOptions {
   platform: NodeJS.Platform;
   xvfb?: boolean;
   screen?: string;
-  /**
-   * Owned directory for the Xauthority file. Without one, xvfb-run makes a temp
-   * dir that only its EXIT trap deletes, and a SIGTERM skips that trap.
-   */
   authDir: string;
 }
 
+// Without -f, xvfb-run makes a temp dir whose EXIT trap does not run on SIGTERM.
 const AUTH_FILE = "Xauthority";
-const RESTORE_APP_CWD = 'export XAUTHORITY="$1" && cd "$2" && shift 2 && exec "$@"';
+const RESTORE_AUTH_AND_CWD = 'export XAUTHORITY="$1" && cd "$2" && shift 2 && exec "$@"';
 
 export function withXvfb(command: LaunchCommand, options: XvfbOptions): LaunchCommand {
   const useXvfb = options.xvfb ?? (options.platform === "linux" && !command.env.DISPLAY);
@@ -47,7 +44,7 @@ export function withXvfb(command: LaunchCommand, options: XvfbOptions): LaunchCo
       `-screen 0 ${options.screen ?? DEFAULT_XVFB_SCREEN}`,
       "/bin/sh",
       "-c",
-      RESTORE_APP_CWD,
+      RESTORE_AUTH_AND_CWD,
       "sh",
       path.join(options.authDir, AUTH_FILE),
       command.cwd ?? process.cwd(),
@@ -58,8 +55,7 @@ export function withXvfb(command: LaunchCommand, options: XvfbOptions): LaunchCo
     // only picks x11grab there (see detectX11Target).
     env: withoutWayland({ ...command.env, [DEDICATED_DISPLAY_ENV]: "1" }),
     // xvfb-run passes Xvfb `-auth $AUTHFILE` unquoted, which splits a path with
-    // spaces, so it runs here with a relative auth file. RESTORE_APP_CWD hands
-    // the app an absolute XAUTHORITY and the caller's directory back.
+    // spaces, so it runs here with a relative auth file.
     cwd: options.authDir,
   };
 }
