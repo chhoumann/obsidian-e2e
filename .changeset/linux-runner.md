@@ -13,8 +13,9 @@ can drop their Linux shims.
 - Each instance keeps its CLI socket private. Linux Obsidian puts the socket in
   `$XDG_RUNTIME_DIR`, so the runner, `resolveObsidianEnvOptions`, and the
   forwarded `run` command point it at the private `HOME` in each process they
-  start. The `start --print-env` output is unchanged, so evaluating it never
-  changes `XDG_RUNTIME_DIR` in your shell.
+  start, and keep Wayland clients on the session compositor. The
+  `start --print-env` output is unchanged, so evaluating it never changes
+  `XDG_RUNTIME_DIR` in your shell.
 - On Linux, `start` and `run` fail before launching when the CLI socket path is
   longer than the 107 bytes Linux allows, and suggest a shorter `profileRoot` or
   vault name. Before, Obsidian could not listen and the runner timed out.

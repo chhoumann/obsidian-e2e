@@ -105,8 +105,10 @@ too:
   `/opt/Obsidian` or the extracted tarball. Flatpak and Snap do not work.
 - `obsidianBin` must be the `obsidian-cli` client next to the executable, not
   the executable that `appName` names. The `.deb` links `/usr/bin/obsidian` to
-  the executable, so a bare `obsidian` can resolve to the app. Register the
-  client under Settings > General > Advanced > Command line interface, or set
+  the executable, so a bare `obsidian` can resolve to the app. Under Settings >
+  General > Advanced, enable "Command line interface", then use "Set up CLI to
+  work in the terminal". It copies the client to `~/.local/bin/obsidian`, which
+  must come before `/usr/bin` on `PATH`. Or set
   `obsidianBin: "/opt/Obsidian/obsidian-cli"`.
 - Without `$DISPLAY` the app runs on a private Xvfb display, so headless hosts
   need `xvfb` and `xauth`. App output goes to `obsidian.log` in the instance
