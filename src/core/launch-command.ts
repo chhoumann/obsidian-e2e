@@ -16,16 +16,26 @@ export function defaultObsidianExecutable(platform: NodeJS.Platform): string {
   );
 }
 
-export function withXvfb(
-  command: LaunchCommand,
-  options: { platform: NodeJS.Platform; xvfb?: boolean; screen?: string },
-): LaunchCommand {
+interface XvfbOptions {
+  platform: NodeJS.Platform;
+  xvfb?: boolean;
+  screen?: string;
+  /**
+   * Inside a directory the caller removes. Without one, xvfb-run makes a temp
+   * dir that only its EXIT trap deletes, and a SIGTERM skips that trap.
+   */
+  authFile: string;
+}
+
+export function withXvfb(command: LaunchCommand, options: XvfbOptions): LaunchCommand {
   const useXvfb = options.xvfb ?? (options.platform === "linux" && !command.env.DISPLAY);
   if (!useXvfb) return command;
   return {
     file: "xvfb-run",
     args: [
       "-a",
+      "-f",
+      options.authFile,
       "-s",
       `-screen 0 ${options.screen ?? DEFAULT_XVFB_SCREEN}`,
       command.file,

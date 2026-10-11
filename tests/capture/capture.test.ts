@@ -129,8 +129,10 @@ describe("capture launch", () => {
     expect(profile.home).toBe("/tmp/obsidian-e2e-capture-9333/home");
     const command = captureLaunchCommand(options, profile);
     expect(command.file).toBe("xvfb-run");
-    expect(command.args.slice(0, 4)).toEqual([
+    expect(command.args.slice(0, 6)).toEqual([
       "-a",
+      "-f",
+      `${profile.home}/Xauthority`,
       "-s",
       "-screen 0 3840x3200x24",
       "/opt/Obsidian/obsidian",

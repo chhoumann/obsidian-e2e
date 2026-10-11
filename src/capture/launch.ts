@@ -140,7 +140,12 @@ export function captureLaunchCommand(
   ];
   return withXvfb(
     { file: app, args: appArgs, env: privateHomeEnv(profile.home, env, platform) },
-    { platform, xvfb: options.xvfb, screen: options.screen },
+    {
+      platform,
+      xvfb: options.xvfb,
+      screen: options.screen,
+      authFile: path.join(profile.home, "Xauthority"),
+    },
   );
 }
 

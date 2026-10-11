@@ -146,6 +146,8 @@ describe("launchObsidianInstance", () => {
     expect(spawned[0]?.file).toBe("xvfb-run");
     expect(spawned[0]?.args).toEqual([
       "-a",
+      "-f",
+      path.join(target.instancePath, "Xauthority"),
       "-s",
       "-screen 0 3840x3200x24",
       app,

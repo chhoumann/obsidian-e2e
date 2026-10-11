@@ -226,7 +226,7 @@ export async function launchObsidianInstance(
         // relaunch find this instance's single-instance lock and hand the link over.
         env: { ...obsidianEnv(target, deps), XDG_CONFIG_HOME: path.dirname(target.userDataPath) },
       },
-      { platform },
+      { platform, authFile: path.join(target.instancePath, "Xauthority") },
     );
     await (deps?.spawnDetached ?? defaultSpawnDetached)(command.file, command.args, {
       env: command.env,
