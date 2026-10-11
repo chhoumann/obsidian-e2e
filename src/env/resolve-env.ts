@@ -39,7 +39,7 @@ export interface ResolvedObsidianEnvOptions extends Partial<CreateObsidianClient
  * Resolve canonical `OBSIDIAN_E2E_*` env into spreadable client options.
  *
  * The Obsidian home (`OBSIDIAN_E2E_OBSIDIAN_HOME`) is injected into
- * `defaultExecOptions.env` per-client (see {@link privateHomeEnv}) so the CLI
+ * `defaultExecOptions.env` per-client so the CLI
  * hits the intended socket without ever mutating `process.env`.
  */
 export function resolveObsidianEnvOptions(

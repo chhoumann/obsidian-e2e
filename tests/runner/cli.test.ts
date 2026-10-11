@@ -370,7 +370,6 @@ describe("start --print-env", () => {
 
     expect(code).toBe(0);
     const exports = streams.out.join("");
-    // QuickAdd's run-e2e parses these lines and rejects any other name.
     const names = exports
       .trim()
       .split("\n")

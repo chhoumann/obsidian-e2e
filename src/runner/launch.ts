@@ -43,13 +43,6 @@ export type SpawnDetachedFn = (
   options: { env: NodeJS.ProcessEnv; logPath: string },
 ) => Promise<void>;
 
-/**
- * All side effects the launcher performs are injected through this object so the
- * whole module is testable with fakes: `execFile` and `spawnDetached` (the
- * child-process boundary), `socketExists` (the CLI-socket probe), `platform`,
- * and the timing primitives plus the poll bounds (`timeoutMs`/`intervalMs`) so
- * timeout paths run instantly under test.
- */
 export interface ObsidianExecDependencies {
   execFile?: ExecFileFn;
   spawnDetached?: SpawnDetachedFn;
@@ -192,9 +185,7 @@ export async function cliSocketExists(
 /**
  * Launch a fresh detached, backgrounded Obsidian bound to the isolated HOME.
  * Re-validates the profile tree first (parent-first) so any future relaunch path
- * that skips the normal preflight still cannot bypass the temp-squat guard. On
- * Linux `obsidianApp` is the executable, run on a private Xvfb display when
- * there is no `$DISPLAY`, with its output in `<instancePath>/obsidian.log`.
+ * that skips the normal preflight still cannot bypass the temp-squat guard.
  */
 export async function launchObsidianInstance(
   target: LaunchTarget,
@@ -206,7 +197,6 @@ export async function launchObsidianInstance(
 
   const platform = resolvePlatform(deps);
   if (platform === "linux") {
-    // Either mistake would otherwise surface only as a readiness timeout.
     if (!(await isExecutableFile(target.obsidianApp))) {
       throw new Error(
         `"${target.obsidianApp}" is not an executable file. On Linux set appName ` +
@@ -227,7 +217,6 @@ export async function launchObsidianInstance(
         file: target.obsidianApp,
         args: [
           "--no-sandbox",
-          // Chromium picks a free port and writes it to <userDataPath>/DevToolsActivePort.
           "--remote-debugging-port=0",
           `--user-data-dir=${target.userDataPath}`,
           "--password-store=basic",

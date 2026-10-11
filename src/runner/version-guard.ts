@@ -55,7 +55,6 @@ export interface MinAppVersionResult {
   minAppVersion: string;
 }
 
-/** `open -a` takes the `.app` name on macOS; Linux launches the executable itself. */
 export function defaultObsidianApp(platform: NodeJS.Platform = process.platform): string {
   return platform === "linux" ? defaultObsidianExecutable(platform) : "Obsidian";
 }
@@ -73,8 +72,7 @@ export function linuxObsidianConfigDir(): string {
  * Standard install locations only, consulted as the floor when the config dir
  * has no usable cached asar (a fresh machine / CI that never auto-updated). A
  * bundle registered elsewhere with an empty cache resolves to null and the
- * guard then refuses to run blind rather than guess. On Linux `obsidianApp` is
- * the executable, which sits next to its `resources/` directory.
+ * guard then refuses to run blind rather than guess.
  */
 export function bundledAsarCandidates(
   obsidianApp: string,

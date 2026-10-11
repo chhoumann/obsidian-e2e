@@ -162,10 +162,6 @@ export function captureLaunchCommand(
   );
 }
 
-/**
- * Run the command inside `xvfb-run` when `xvfb` is set, which defaults to Linux
- * without `$DISPLAY`. Shared with the runner's Linux launch.
- */
 export function withXvfb(
   command: CaptureLaunchCommand,
   options: { platform: NodeJS.Platform; xvfb?: boolean; screen?: string },

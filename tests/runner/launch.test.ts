@@ -156,14 +156,11 @@ describe("launchObsidianInstance", () => {
     ]);
     expect(spawned[0]?.env.HOME).toBe(target.obsidianHome);
     expect(spawned[0]?.env.WAYLAND_DISPLAY).toBeUndefined();
-    // The app must listen where the readiness gate looks, not in the shared runtime dir.
     expect(linuxCliSocket(spawned[0]?.env)).toBe(cliSocketPath(target));
-    // An obsidian:// relaunch runs without --user-data-dir and must land in this profile.
     const { XDG_CONFIG_HOME, HOME } = spawned[0]?.env ?? {};
     expect(path.join(XDG_CONFIG_HOME || path.join(HOME ?? "", ".config"), "obsidian")).toBe(
       target.userDataPath,
     );
-    // The version guard keeps reading the host's asar cache.
     expect(linuxObsidianConfigDir()).toBe("/home/user/.config/obsidian");
     expect(logPaths).toEqual([path.join(target.instancePath, "obsidian.log")]);
   });
@@ -198,14 +195,14 @@ describe("launchObsidianInstance", () => {
         { ...(await makeLaunchTarget(app)), obsidianHome },
         { spawnDetached, platform: "linux" },
       );
-    // The socket path is the home path plus 19 bytes of "/.obsidian-cli.sock".
-    const multibyteHome = `/é${"a".repeat(86)}`;
+    const maxHomeBytes = 107 - Buffer.byteLength("/.obsidian-cli.sock");
+    const multibyteHome = `/é${"a".repeat(maxHomeBytes - 2)}`;
     expect(cliSocketPath({ obsidianHome: multibyteHome })).toHaveLength(107);
 
-    await launchWithHome(`/${"a".repeat(87)}`);
+    await launchWithHome(`/${"a".repeat(maxHomeBytes - 1)}`);
     expect(spawned).toHaveLength(1);
     const tooLong = /is 108 bytes, but Linux allows at most 107\. Shorten profileRoot/;
-    await expect(launchWithHome(`/${"a".repeat(88)}`)).rejects.toThrow(tooLong);
+    await expect(launchWithHome(`/${"a".repeat(maxHomeBytes)}`)).rejects.toThrow(tooLong);
     await expect(launchWithHome(multibyteHome)).rejects.toThrow(tooLong);
     expect(spawned).toHaveLength(1);
   });
