@@ -103,6 +103,11 @@ too:
   `/opt/Obsidian/obsidian`. A symlink such as `/usr/bin/obsidian` works. The
   install must keep `resources/` next to the executable, like the `.deb` in
   `/opt/Obsidian` or the extracted tarball. Flatpak and Snap do not work.
+- `obsidianBin` must be the `obsidian-cli` client next to the executable, not
+  the executable that `appName` names. The `.deb` links `/usr/bin/obsidian` to
+  the executable, so a bare `obsidian` can resolve to the app. Register the
+  client under Settings > General > Advanced > Command line interface, or set
+  `obsidianBin: "/opt/Obsidian/obsidian-cli"`.
 - Without `$DISPLAY` the app runs on a private Xvfb display, so headless hosts
   need `xvfb` and `xauth`. App output goes to `obsidian.log` in the instance
   directory.
@@ -121,7 +126,9 @@ too:
 - The app starts with `--remote-debugging-port=0`. Chromium picks a free
   DevTools port and writes it as the first line of `DevToolsActivePort` in
   `home/Library/Application Support/obsidian` under the instance directory.
-  Pass that port to `capture` with `--port` or `OBSIDIAN_E2E_CDP_PORT`.
+  Pass that port to `capture` with `--port` or `OBSIDIAN_E2E_CDP_PORT`. This
+  DevTools endpoint is an unauthenticated localhost debugging port, intended
+  for trusted local test environments.
 - The app runs with `XDG_CONFIG_HOME` set to `home/Library/Application Support`
   under the instance directory. An `obsidian://` link opened from inside the app
   relaunches the executable without `--user-data-dir`. The relaunch then finds
