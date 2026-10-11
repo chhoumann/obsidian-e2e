@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 
+import { privateHomeEnv } from "../env/resolve-env";
 import { toShellExports, writeJson } from "../runner/fs-utils";
 import { ensureSecureDir } from "../runner/security";
 
@@ -91,9 +92,9 @@ export function resolveCaptureProfile(
 
 /**
  * Create the private profile and register the vault as the one open vault (with
- * the CLI enabled so `HOME=<home> obsidian vault=<name> ...` also works). Never
- * writes inside the vault; it only reports vault config that commonly spoils
- * captures.
+ * the CLI enabled so `HOME=<home> XDG_RUNTIME_DIR=<home> obsidian vault=<name> ...`
+ * also works). Never writes inside the vault; it only reports vault config that
+ * commonly spoils captures.
  */
 export async function prepareCaptureProfile(
   options: CaptureLaunchOptions,
@@ -156,7 +157,7 @@ export function captureLaunchCommand(
     ...(options.extraArgs ?? []),
   ];
   return withXvfb(
-    { file: app, args: appArgs, env: { ...env, HOME: profile.home } },
+    { file: app, args: appArgs, env: privateHomeEnv(profile.home, env, platform) },
     { platform, xvfb: options.xvfb, screen: options.screen },
   );
 }

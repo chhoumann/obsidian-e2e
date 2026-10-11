@@ -19,6 +19,7 @@ import {
 } from "../../src/capture/page";
 import { buildConcatList, encoderArgs, startRecording } from "../../src/capture/record";
 import { CdpClient, type CdpSocket } from "../../src/runner/android/cdp";
+import { linuxCliSocket } from "../helpers/cli-socket";
 import { cleanupTempDirectories, createTempDir } from "../helpers/create-temp-dir";
 
 const tempDirectories: string[] = [];
@@ -147,6 +148,20 @@ describe("capture launch", () => {
     expect(underXvfb.file).toBe("xvfb-run");
     expect(underXvfb.env.WAYLAND_DISPLAY).toBeUndefined();
     expect(underXvfb.env.XDG_SESSION_TYPE).toBe("x11");
+  });
+
+  test("linux keeps the capture instance's CLI socket in its private HOME", () => {
+    for (const display of [undefined, ":0"]) {
+      const options = {
+        vaultPath: "/v/Demo",
+        platform: "linux" as const,
+        env: { DISPLAY: display, XDG_RUNTIME_DIR: "/run/user/1000" },
+      };
+      const profile = resolveCaptureProfile(options);
+      expect(linuxCliSocket(captureLaunchCommand(options, profile).env)).toBe(
+        path.join(profile.home, ".obsidian-cli.sock"),
+      );
+    }
   });
 
   test("an existing DISPLAY or macOS runs the app directly", () => {

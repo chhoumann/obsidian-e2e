@@ -22,6 +22,8 @@ can drop their Linux shims.
   directory. Its `XDG_CONFIG_HOME` points at its own profile, so an
   `obsidian://` link opened from inside it reaches the running instance instead
   of starting a second app.
+- `capture launch` on Linux also points `XDG_RUNTIME_DIR` at its private
+  `HOME`, so its CLI socket no longer collides with a desktop Obsidian.
 - The version guard finds Linux installs: cached asars in
   `${XDG_CONFIG_HOME:-~/.config}/obsidian` and the installer asar in
   `resources/` next to the executable, following symlinks.
