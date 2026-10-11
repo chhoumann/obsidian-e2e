@@ -96,18 +96,25 @@ export default {
 Requirements are the same as the test helpers: Obsidian installed locally and the
 `obsidian` CLI on `PATH`.
 
-On Linux the runner starts the executable at the `appName` path itself. Installs
-that keep `resources/` next to the executable work (the `.deb` in
-`/opt/Obsidian`, or the extracted tarball); Flatpak and Snap do not.
-Without `$DISPLAY` it runs on a private Xvfb display, so headless hosts need
-`xvfb` and `xauth`. App output goes to `obsidian.log` in the instance directory.
-The version guard reads cached `obsidian-*.asar` files from
-`${XDG_CONFIG_HOME:-~/.config}/obsidian` and the installer's
-`resources/obsidian.asar` next to the executable. Linux Obsidian and its CLI put
-the CLI socket in `$XDG_RUNTIME_DIR` when it is set, so the runner points
-`XDG_RUNTIME_DIR` at the private `HOME` for the app and every CLI call, and
-`start --print-env` exports it. Evaluating that output therefore also changes
-`XDG_RUNTIME_DIR` in your shell, so keep it to a shell dedicated to the e2e run.
+On Linux the runner launches the Obsidian executable itself, on headless hosts
+too:
+
+- `appName` (or `--obsidian-app`) is the path to the executable, default
+  `/opt/Obsidian/obsidian`. A symlink such as `/usr/bin/obsidian` works. The
+  install must keep `resources/` next to the executable, like the `.deb` in
+  `/opt/Obsidian` or the extracted tarball. Flatpak and Snap do not work.
+- Without `$DISPLAY` the app runs on a private Xvfb display, so headless hosts
+  need `xvfb` and `xauth`. App output goes to `obsidian.log` in the instance
+  directory.
+- The version guard reads cached `obsidian-*.asar` files from
+  `${XDG_CONFIG_HOME:-~/.config}/obsidian` and the installer's
+  `resources/obsidian.asar` next to the executable.
+- Linux Obsidian and its CLI put the CLI socket in `$XDG_RUNTIME_DIR` when it is
+  set. The runner points `HOME` and `XDG_RUNTIME_DIR` at the private `HOME` only
+  in the processes it starts: the app, its own CLI calls, the command `run`
+  forwards, and clients built with `resolveObsidianEnvOptions`.
+  `start --print-env` leaves `XDG_RUNTIME_DIR` in your shell alone, so a bare
+  `obsidian` command there does not reach the instance. Use `run` instead.
 
 ### Subcommands
 
@@ -175,7 +182,6 @@ pace.
 | `OBSIDIAN_E2E_VAULT_PATH`                               | `provision`, `start`       | absolute path to the provisioned vault                 |
 | `OBSIDIAN_E2E_OBSIDIAN_HOME`                            | `start`                    | the private `HOME` for this instance                   |
 | `OBSIDIAN_BIN`                                          | `start`                    | only when a non-default `--obsidian-bin` is set        |
-| `XDG_RUNTIME_DIR`                                       | `start`, on Linux          | the private `HOME`, where the CLI finds the socket     |
 | `<PREFIX>_E2E_VAULT` / `_VAULT_PATH` / `_OBSIDIAN_HOME` | both, when `envPrefix` set | legacy aliases during migration                        |
 
 ### Android (emulator)

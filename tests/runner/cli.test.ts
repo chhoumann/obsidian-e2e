@@ -17,7 +17,6 @@ import {
 } from "../../src/runner/cli";
 import { slugify } from "../../src/runner/fs-utils";
 import { stableInstanceId } from "../../src/runner/instance";
-import { cliSocketPath } from "../../src/runner/launch";
 import type { InstanceOptions, ResolvedRunnerConfig } from "../../src/runner/types";
 import { linuxCliSocket } from "../helpers/cli-socket";
 import { cleanupTempDirectories, createTempDir } from "../helpers/create-temp-dir";
@@ -350,8 +349,8 @@ describe("spawnObsidian", () => {
   });
 });
 
-describe("start --print-env on Linux", () => {
-  test("exports what a shell needs to reach the private socket after exporting HOME", async () => {
+describe("start --print-env", () => {
+  test("exports only instance names, so eval leaves the shell's XDG_RUNTIME_DIR alone", async () => {
     const worktree = await createTempDir(tempDirectories, "cli-start-");
     const profileRoot = await createTempDir(tempDirectories, "cli-profile-");
     const { streams, stdout, stderr } = makeStreams();
@@ -362,7 +361,7 @@ describe("start --print-env on Linux", () => {
         cwd: worktree,
         stdout,
         stderr,
-        loadRunnerConfig: configLoader({ pluginId: "quickadd" }),
+        loadRunnerConfig: configLoader({ pluginId: "quickadd", envPrefix: "QUICKADD" }),
         ensureObsidianInstance: stubEnsure,
         reapOrphanedInstances: async () => ({ scanned: 0, reaped: [] }),
         exec: { platform: "linux" },
@@ -371,27 +370,30 @@ describe("start --print-env on Linux", () => {
 
     expect(code).toBe(0);
     const exports = streams.out.join("");
-    for (const line of exports.split("\n").filter(Boolean)) {
-      expect(line.startsWith("export ")).toBe(true);
-    }
-    // The documented consumer flow, run in a real shell that starts in a desktop session.
-    const [runtimeDir, home] = execFileSync(
-      "sh",
-      [
-        "-c",
-        'eval "$EXPORTS"; export HOME="$OBSIDIAN_E2E_OBSIDIAN_HOME"; echo "$XDG_RUNTIME_DIR"; echo "$HOME"',
-      ],
-      {
-        encoding: "utf8",
-        env: { PATH: process.env.PATH, XDG_RUNTIME_DIR: "/run/user/1000", EXPORTS: exports },
-      },
-    )
+    // QuickAdd's run-e2e parses these lines and rejects any other name.
+    const names = exports
       .trim()
-      .split("\n");
-    expect(home?.startsWith(profileRoot)).toBe(true);
-    expect(linuxCliSocket({ XDG_RUNTIME_DIR: runtimeDir, HOME: home })).toBe(
-      cliSocketPath({ obsidianHome: home! }),
-    );
+      .split("\n")
+      .map((line) => /^export ([A-Z0-9_]+)='[^']*'$/.exec(line)?.[1] ?? line);
+    expect(names.sort()).toEqual([
+      "OBSIDIAN_E2E_OBSIDIAN_HOME",
+      "OBSIDIAN_E2E_VAULT",
+      "OBSIDIAN_E2E_VAULT_PATH",
+      "QUICKADD_E2E_OBSIDIAN_HOME",
+      "QUICKADD_E2E_VAULT",
+      "QUICKADD_E2E_VAULT_PATH",
+    ]);
+    for (const runtimeDir of ["/run/user/1000", undefined]) {
+      const after = execFileSync(
+        "sh",
+        ["-c", 'eval "$EXPORTS"; printf %s "${XDG_RUNTIME_DIR-unset}"'],
+        {
+          encoding: "utf8",
+          env: { PATH: process.env.PATH, EXPORTS: exports, XDG_RUNTIME_DIR: runtimeDir },
+        },
+      );
+      expect(after).toBe(runtimeDir ?? "unset");
+    }
   });
 });
 

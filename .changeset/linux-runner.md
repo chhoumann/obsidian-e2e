@@ -11,8 +11,9 @@ can drop their Linux shims.
   directory.
 - Each instance keeps its CLI socket private. Linux Obsidian puts the socket in
   `$XDG_RUNTIME_DIR`, so the runner, `resolveObsidianEnvOptions`, and the
-  forwarded `run` command point it at the private `HOME`, and
-  `start --print-env` exports `XDG_RUNTIME_DIR` on Linux.
+  forwarded `run` command point it at the private `HOME` in each process they
+  start. The `start --print-env` output is unchanged, so evaluating it never
+  changes `XDG_RUNTIME_DIR` in your shell.
 - The version guard finds Linux installs: cached asars in
   `${XDG_CONFIG_HOME:-~/.config}/obsidian` and the installer asar in
   `resources/` next to the executable, following symlinks.

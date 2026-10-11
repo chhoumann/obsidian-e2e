@@ -246,16 +246,10 @@ describe("linkHostKeychains", () => {
 
 describe("toInstanceShellExports", () => {
   test("emits the canonical OBSIDIAN_HOME and omits aliases by default", () => {
-    const exports = toInstanceShellExports({ obsidianHome: "/tmp/home", platform: "darwin" });
+    const exports = toInstanceShellExports({ obsidianHome: "/tmp/home" });
     expect(exports).toContain("export OBSIDIAN_E2E_OBSIDIAN_HOME='/tmp/home'");
     expect(exports).not.toContain("_E2E_OBSIDIAN_HOME='/tmp/home'\nexport");
     expect(exports).not.toContain("OBSIDIAN_BIN");
-    expect(exports).not.toContain("XDG_RUNTIME_DIR");
-  });
-
-  test("on Linux also exports XDG_RUNTIME_DIR, where the CLI looks for the socket", () => {
-    const exports = toInstanceShellExports({ obsidianHome: "/tmp/home", platform: "linux" });
-    expect(exports).toContain("export XDG_RUNTIME_DIR='/tmp/home'");
   });
 
   test("emits the legacy prefix alias and non-default OBSIDIAN_BIN when configured", () => {

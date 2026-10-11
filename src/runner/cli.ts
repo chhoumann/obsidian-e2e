@@ -293,7 +293,6 @@ async function runStart(
         obsidianHome: options.obsidianHome,
         obsidianBin: options.obsidianBin,
         envPrefix: config.envPrefix,
-        platform: deps.exec?.platform,
       }),
     );
   }
@@ -544,8 +543,7 @@ function subcommandHelp(subcommand: Exclude<Subcommand, "android" | "capture">):
         "",
         "Flags:",
         SHARED_FLAGS,
-        "  --print-env             emit `export OBSIDIAN_E2E_*` lines (and XDG_RUNTIME_DIR on Linux)",
-        "                          on stdout for eval",
+        "  --print-env             emit `export OBSIDIAN_E2E_*` lines on stdout for eval",
         "  --no-launch             prepare the profile only; do not launch or verify",
         "  --skip-version-guard    skip the minAppVersion / mid-session update guard",
       ].join("\n");

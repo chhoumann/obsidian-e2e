@@ -4,7 +4,6 @@ import path from "node:path";
 import process from "node:process";
 
 import { errorHasCode, isRecord } from "../core/errors";
-import { privateHomeEnv } from "../env/resolve-env";
 import type { ShellExport } from "./fs-utils";
 import { safeName, toShellExports, writeJson } from "./fs-utils";
 import { ensureSecureDir } from "./security";
@@ -244,16 +243,13 @@ export interface InstanceShellExportInput {
   obsidianBin?: string;
   /** When set, emit the legacy `<PREFIX>_E2E_OBSIDIAN_HOME` alias during migration. */
   envPrefix?: string;
-  /** Defaults to `process.platform`. */
-  platform?: NodeJS.Platform;
 }
 
 /**
  * Render the instance-level shell exports: the canonical
  * `OBSIDIAN_E2E_OBSIDIAN_HOME`, the optional legacy `<PREFIX>_E2E_OBSIDIAN_HOME`
- * alias, `OBSIDIAN_BIN` only when a non-default binary was selected (the
- * harnesses read `OBSIDIAN_BIN ?? "obsidian"`), and on Linux `XDG_RUNTIME_DIR`,
- * where the CLI looks for the instance's socket. The provision-level
+ * alias, and `OBSIDIAN_BIN` only when a non-default binary was selected (the
+ * harnesses read `OBSIDIAN_BIN ?? "obsidian"`). The provision-level
  * `OBSIDIAN_E2E_VAULT*` lines are emitted separately by the provision module.
  */
 export function toInstanceShellExports(input: InstanceShellExportInput): string {
@@ -266,7 +262,5 @@ export function toInstanceShellExports(input: InstanceShellExportInput): string 
   if (input.obsidianBin && input.obsidianBin !== DEFAULT_OBSIDIAN_BIN) {
     exports.push({ name: "OBSIDIAN_BIN", value: input.obsidianBin });
   }
-  const { XDG_RUNTIME_DIR } = privateHomeEnv(input.obsidianHome, {}, input.platform);
-  if (XDG_RUNTIME_DIR) exports.push({ name: "XDG_RUNTIME_DIR", value: XDG_RUNTIME_DIR });
   return toShellExports(exports);
 }
