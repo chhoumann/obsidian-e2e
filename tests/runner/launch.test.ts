@@ -5,6 +5,7 @@ import { afterEach, describe, expect, test, vi } from "vite-plus/test";
 
 import { linuxCliSocket } from "../helpers/cli-socket";
 import { cleanupTempDirectories, createTempDir } from "../helpers/create-temp-dir";
+import { installXvfbStandIns } from "../helpers/fake-xvfb-run";
 import type {
   ExecFileFn,
   ExecFileResult,
@@ -131,10 +132,15 @@ describe("launchObsidianInstance", () => {
     await fs.writeFile(app, "", { mode: 0o755 });
     const target = await makeLaunchTarget(app);
     const { execFile, calls } = makeExec(() => ok(""));
-    const spawned: { file: string; args: readonly string[]; env: NodeJS.ProcessEnv }[] = [];
+    const spawned: {
+      file: string;
+      args: readonly string[];
+      env: NodeJS.ProcessEnv;
+      cwd?: string;
+    }[] = [];
     const logPaths: string[] = [];
-    const spawnDetached: SpawnDetachedFn = async (file, args, { env, logPath }) => {
-      spawned.push({ file, args, env });
+    const spawnDetached: SpawnDetachedFn = async (file, args, { env, cwd, logPath }) => {
+      spawned.push({ file, args, env, cwd });
       logPaths.push(logPath);
     };
 
@@ -143,12 +149,19 @@ describe("launchObsidianInstance", () => {
     expect(calls).toEqual([]);
     expect(spawned).toHaveLength(1);
     expect(spawned[0]?.file).toBe("xvfb-run");
+    expect(spawned[0]?.cwd).toBe(target.instancePath);
     expect(spawned[0]?.args).toEqual([
       "-a",
       "-f",
-      path.join(target.instancePath, "Xauthority"),
+      "Xauthority",
       "-s",
       "-screen 0 3840x3200x24",
+      "/bin/sh",
+      "-c",
+      expect.any(String),
+      "sh",
+      path.join(target.instancePath, "Xauthority"),
+      process.cwd(),
       app,
       "--no-sandbox",
       "--remote-debugging-port=0",
@@ -164,6 +177,30 @@ describe("launchObsidianInstance", () => {
     );
     expect(process.env.XDG_CONFIG_HOME).toBe("/home/user/.config");
     expect(logPaths).toEqual([path.join(target.instancePath, "obsidian.log")]);
+  });
+
+  test("on Linux under xvfb-run a profile root with spaces starts the app from the caller's cwd", async () => {
+    const dir = await createTempDir(tempDirectories, "xvfb-run-");
+    const { app, readLaunch } = await installXvfbStandIns(dir);
+    vi.stubEnv("PATH", `${dir}${path.delimiter}${process.env.PATH ?? ""}`);
+    vi.stubEnv("DISPLAY", "");
+    const profileRoot = path.join(dir, "profile root");
+    const instancePath = path.join(profileRoot, "instance");
+    const target: LaunchTarget = {
+      obsidianApp: path.relative(process.cwd(), app),
+      obsidianHome: path.join(instancePath, "home"),
+      userDataPath: path.join(instancePath, "home", ".config", "obsidian"),
+      profileRoot,
+      instancePath,
+    };
+
+    await launchObsidianInstance(target, { platform: "linux" });
+
+    const launch = await vi.waitFor(readLaunch, { timeout: 5_000 });
+    expect(launch.cwd).toBe(await fs.realpath(process.cwd()));
+    expect(launch.xauthority).toBe(path.join(instancePath, "Xauthority"));
+    await expect(fs.access(launch.xauthority)).resolves.toBeUndefined();
+    expect(launch.args).toContain(`--user-data-dir=${target.userDataPath}`);
   });
 
   test("on Linux an appName that is not an executable file fails before spawning", async () => {

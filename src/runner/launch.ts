@@ -40,7 +40,7 @@ export type ExecFileFn = (
 export type SpawnDetachedFn = (
   file: string,
   args: readonly string[],
-  options: { env: NodeJS.ProcessEnv; logPath: string },
+  options: { env: NodeJS.ProcessEnv; cwd?: string; logPath: string },
 ) => Promise<void>;
 
 export interface ObsidianExecDependencies {
@@ -86,12 +86,13 @@ const defaultExecFile: ExecFileFn = async (file, args, options = {}) => {
   return { stdout, stderr };
 };
 
-const defaultSpawnDetached: SpawnDetachedFn = async (file, args, { env, logPath }) => {
+const defaultSpawnDetached: SpawnDetachedFn = async (file, args, { env, cwd, logPath }) => {
   const log = await fs.open(logPath, "a", 0o600);
   try {
     const child = spawn(file, [...args], {
       detached: true,
       env,
+      cwd,
       stdio: ["ignore", log.fd, log.fd],
     });
     await new Promise<void>((resolve, reject) => {
@@ -226,10 +227,11 @@ export async function launchObsidianInstance(
         // relaunch find this instance's single-instance lock and hand the link over.
         env: { ...obsidianEnv(target, deps), XDG_CONFIG_HOME: path.dirname(target.userDataPath) },
       },
-      { platform, authFile: path.join(target.instancePath, "Xauthority") },
+      { platform, authDir: target.instancePath },
     );
     await (deps?.spawnDetached ?? defaultSpawnDetached)(command.file, command.args, {
       env: command.env,
+      cwd: command.cwd,
       logPath: path.join(target.instancePath, "obsidian.log"),
     });
     return;

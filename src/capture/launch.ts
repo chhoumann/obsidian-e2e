@@ -144,7 +144,7 @@ export function captureLaunchCommand(
       platform,
       xvfb: options.xvfb,
       screen: options.screen,
-      authFile: path.join(profile.home, "Xauthority"),
+      authDir: profile.home,
     },
   );
 }
@@ -173,6 +173,7 @@ export async function runCaptureInstance(
   const group = process.platform !== "win32";
   const child = spawn(command.file, command.args, {
     env: command.env,
+    cwd: command.cwd,
     stdio: "inherit",
     detached: group,
   });

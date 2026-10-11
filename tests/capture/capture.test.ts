@@ -9,6 +9,7 @@ import {
   captureLaunchCommand,
   prepareCaptureProfile,
   resolveCaptureProfile,
+  runCaptureInstance,
 } from "../../src/capture/launch";
 import {
   captureScreenshot,
@@ -21,6 +22,7 @@ import { buildConcatList, encoderArgs, startRecording } from "../../src/capture/
 import { CdpClient, type CdpSocket } from "../../src/runner/android/cdp";
 import { linuxCliSocket, waylandSocket } from "../helpers/cli-socket";
 import { cleanupTempDirectories, createTempDir } from "../helpers/create-temp-dir";
+import { installXvfbStandIns } from "../helpers/fake-xvfb-run";
 
 const tempDirectories: string[] = [];
 afterEach(async () => {
@@ -129,14 +131,15 @@ describe("capture launch", () => {
     expect(profile.home).toBe("/tmp/obsidian-e2e-capture-9333/home");
     const command = captureLaunchCommand(options, profile);
     expect(command.file).toBe("xvfb-run");
-    expect(command.args.slice(0, 6)).toEqual([
+    expect(command.cwd).toBe(profile.home);
+    expect(command.args.slice(0, 5)).toEqual([
       "-a",
       "-f",
-      `${profile.home}/Xauthority`,
+      "Xauthority",
       "-s",
       "-screen 0 3840x3200x24",
-      "/opt/Obsidian/obsidian",
     ]);
+    expect(command.args).toContain("/opt/Obsidian/obsidian");
     expect(command.args).toContain("--remote-debugging-port=9333");
     expect(command.args).toContain("--force-device-scale-factor=2");
     expect(command.args).toContain(`--user-data-dir=${profile.home}/.config/obsidian`);
@@ -150,6 +153,29 @@ describe("capture launch", () => {
     expect(underXvfb.file).toBe("xvfb-run");
     expect(underXvfb.env.WAYLAND_DISPLAY).toBeUndefined();
     expect(underXvfb.env.XDG_SESSION_TYPE).toBe("x11");
+  });
+
+  test("linux under xvfb-run, a root with spaces starts the app from the caller's cwd", async () => {
+    const dir = await createTempDir(tempDirectories, "capture-xvfb-");
+    const { app, readLaunch } = await installXvfbStandIns(dir);
+    const vaultPath = path.join(dir, "vault");
+    await fs.mkdir(vaultPath);
+    const options = {
+      vaultPath,
+      root: path.join(dir, "capture root"),
+      platform: "linux" as const,
+      obsidianApp: path.relative(process.cwd(), app),
+      env: { PATH: `${dir}${path.delimiter}${process.env.PATH ?? ""}` },
+    };
+    const profile = await prepareCaptureProfile(options);
+
+    expect(await runCaptureInstance(captureLaunchCommand(options, profile), () => {})).toBe(0);
+
+    const launch = await readLaunch();
+    expect(launch.cwd).toBe(await fs.realpath(process.cwd()));
+    expect(launch.xauthority).toBe(path.join(profile.home, "Xauthority"));
+    await expect(fs.access(launch.xauthority)).resolves.toBeUndefined();
+    expect(launch.args).toContain(`--user-data-dir=${profile.userDataPath}`);
   });
 
   test("linux keeps the capture instance's CLI socket in its private HOME", () => {
