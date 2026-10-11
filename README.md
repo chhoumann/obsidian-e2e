@@ -115,6 +115,9 @@ too:
   forwards, and clients built with `resolveObsidianEnvOptions`.
   `start --print-env` leaves `XDG_RUNTIME_DIR` in your shell alone, so a bare
   `obsidian` command there does not reach the instance. Use `run` instead.
+- The CLI socket path, `<profileRoot>/<vault>-<hash>/home/.obsidian-cli.sock`,
+  must fit in the 107 bytes Linux allows. If it does not, `start` fails before
+  it launches anything. Shorten `profileRoot` or the vault name.
 
 ### Subcommands
 

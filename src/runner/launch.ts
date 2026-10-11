@@ -16,6 +16,8 @@ const DEFAULT_READY_TIMEOUT_MS = 30_000;
 const DEFAULT_READY_INTERVAL_MS = 500;
 const READY_PROBE_TIMEOUT_MS = 5_000;
 const CLI_SOCKET_FILE = ".obsidian-cli.sock";
+// sockaddr_un.sun_path holds 108 bytes, including the terminating NUL.
+const MAX_LINUX_SOCKET_PATH_BYTES = 107;
 
 export interface ExecFileResult {
   stdout: string;
@@ -204,11 +206,20 @@ export async function launchObsidianInstance(
 
   const platform = resolvePlatform(deps);
   if (platform === "linux") {
-    // Under xvfb-run a bad path would only surface as a readiness timeout.
+    // Either mistake would otherwise surface only as a readiness timeout.
     if (!(await isExecutableFile(target.obsidianApp))) {
       throw new Error(
         `"${target.obsidianApp}" is not an executable file. On Linux set appName ` +
           `(or --obsidian-app) to the path of the Obsidian executable.`,
+      );
+    }
+    const socketPath = cliSocketPath(target);
+    const socketBytes = Buffer.byteLength(socketPath);
+    if (socketBytes > MAX_LINUX_SOCKET_PATH_BYTES) {
+      throw new Error(
+        `The CLI socket path ${socketPath} is ${socketBytes} bytes, but Linux allows at most ` +
+          `${MAX_LINUX_SOCKET_PATH_BYTES}. Shorten profileRoot (--profile-root) or the vault ` +
+          `name (--vault).`,
       );
     }
     const command = withXvfb(

@@ -175,6 +175,30 @@ describe("launchObsidianInstance", () => {
     }
     expect(spawned).toBe(0);
   });
+
+  test("on Linux a CLI socket path over 107 bytes fails before spawning", async () => {
+    const app = path.join(await createTempDir(tempDirectories, "obsidian-install-"), "obsidian");
+    await fs.writeFile(app, "", { mode: 0o755 });
+    const spawned: string[] = [];
+    const spawnDetached: SpawnDetachedFn = async (file) => {
+      spawned.push(file);
+    };
+    const launchWithHome = async (obsidianHome: string) =>
+      launchObsidianInstance(
+        { ...(await makeLaunchTarget(app)), obsidianHome },
+        { spawnDetached, platform: "linux" },
+      );
+    // The socket path is the home path plus 19 bytes of "/.obsidian-cli.sock".
+    const multibyteHome = `/é${"a".repeat(86)}`;
+    expect(cliSocketPath({ obsidianHome: multibyteHome })).toHaveLength(107);
+
+    await launchWithHome(`/${"a".repeat(87)}`);
+    expect(spawned).toHaveLength(1);
+    const tooLong = /is 108 bytes, but Linux allows at most 107\. Shorten profileRoot/;
+    await expect(launchWithHome(`/${"a".repeat(88)}`)).rejects.toThrow(tooLong);
+    await expect(launchWithHome(multibyteHome)).rejects.toThrow(tooLong);
+    expect(spawned).toHaveLength(1);
+  });
 });
 
 describe("cliSocketExists", () => {
