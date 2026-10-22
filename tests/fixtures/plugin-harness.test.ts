@@ -195,17 +195,20 @@ const repoRoot = path.join(__dirname, "..", "..");
 const fixturesDir = path.join(repoRoot, "src", "fixtures");
 const harnessSource = path.join(fixturesDir, "plugin-harness.ts");
 const distVitest = path.join(repoRoot, "dist", "vitest.mjs");
+const distMatchers = path.join(repoRoot, "dist", "matchers.mjs");
 
 function ensureFreshDist(): void {
   // Rebuild only when the bundle is missing or older than the inputs that decide
-  // the binding (the fixture sources and package.json, which owns externalization
-  // via the vitest peer dep). Keeps the common fresh-dist case free while making
-  // the assertion reflect the current source + build config in CI and after edits.
+  // the binding (the fixture and matcher sources and package.json, which owns
+  // externalization via the vitest peer dep). Keeps the common fresh-dist case
+  // free while making the assertion reflect the current source + build config in
+  // CI and after edits.
   if (existsSync(distVitest)) {
     const distMtime = statSync(distVitest).mtimeMs;
     const packageJson = path.join(repoRoot, "package.json");
     const newestInput = Math.max(
       statSync(packageJson).mtimeMs,
+      statSync(path.join(repoRoot, "src", "matchers.ts")).mtimeMs,
       ...readdirSync(fixturesDir).map(
         (fileName) => statSync(path.join(fixturesDir, fileName)).mtimeMs,
       ),
@@ -226,7 +229,7 @@ describe("createPluginHarness runner binding", () => {
     // "vite-plus/test"), they register on a runner that never sees the consumer's
     // suite, so every file fails at collection with "failed to find the current
     // suite". Guarding the import specifier keeps the binding correct; the package's
-    // own suite aliases "vitest" to the same vite-plus-test runner, so it stays green.
+    // own suite pins "vitest" to the copy vite-plus/test re-exports, so it stays green.
     const source = await fs.readFile(harnessSource, "utf8");
 
     expect(source).toMatch(/import\s*\{[^}]*\bbeforeAll\b[^}]*\}\s*from\s*"vitest"/u);
@@ -247,7 +250,7 @@ describe("createPluginHarness runner binding", () => {
 
   it('externalizes the runner as "vitest" in the built dist', { timeout: 60_000 }, () => {
     // The source guard above is not enough on its own: inside this package
-    // "vitest" is aliased to vite-plus-test, so if the vitest peer dep were dropped
+    // "vitest" is a devDependency, so if the vitest peer dep were dropped
     // vp pack would bundle that runner inline (emitting a local `function beforeAll`)
     // instead of externalizing the import, silently reintroducing the consumer
     // breakage. Assert the shipped bundle keeps `from "vitest"` external and holds
@@ -261,9 +264,19 @@ describe("createPluginHarness runner binding", () => {
     // (removed in Vitest 5) is only a lazy fallback for Vitest before 4.1.
     expect(bundled).toMatch(/import\s*\*\s*as\s*\w+\s*from\s*"vitest"/u);
     expect(bundled).not.toMatch(/import\s*\{[^}]*\}\s*from\s*"vitest\/suite"/u);
-    expect(bundled).toMatch(/await import\("vitest\/suite"\)/u);
+    expect(bundled).toMatch(/await import\((?:\s*\/\*[^*]*\*\/)?\s*"vitest\/suite"\s*\)/u);
     expect(bundled).not.toMatch(/function beforeAll\(/u);
     expect(bundled).not.toMatch(/from\s*"vite-plus\/test"/u);
+  });
+
+  it('extends the consumer\'s "vitest" expect in the built matchers', { timeout: 60_000 }, () => {
+    // Matchers registered on another runner's `expect` never reach the consumer's
+    // assertions, and vite-plus is not a dependency of consumers.
+    ensureFreshDist();
+    const bundled = readFileSync(distMatchers, "utf8");
+
+    expect(bundled).toMatch(/import\s*\{\s*expect\s*\}\s*from\s*"vitest"/u);
+    expect(bundled).not.toMatch(/vite-plus/u);
   });
 });
 

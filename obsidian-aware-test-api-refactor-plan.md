@@ -77,7 +77,7 @@ depends_on: []
 - Route internal Obsidian queries through harness functions instead of
   scattering raw `dev.eval(...)` snippets across the codebase.
 - Redefine `dev.eval<T>()` to return a structured envelope `{ ok, value } | {
-ok, error }`, with JSON-only serialization, stable array/object behavior, and
+  ok, error }`, with JSON-only serialization, stable array/object behavior, and
   remote stack traces.
 - Add `dev.evalRaw()` for the true escape-hatch path so the typed API can stay
   strict.
