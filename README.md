@@ -925,6 +925,10 @@ Import `obsidian-e2e/matchers` once in your test setup to register:
 - `toHavePluginData(expected)`
 - `toHaveWorkspaceNode(label)`
 
+The matchers extend the `expect` exported by `vitest`. With Vite+ 1.1 or later,
+`vite-plus/test` re-exports that same `expect`. The matcher typings target
+Vitest 5.
+
 Example:
 
 ```ts

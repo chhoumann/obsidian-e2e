@@ -1,7 +1,7 @@
 // Bind to "vitest" (not "vite-plus/test"), mirroring plugin-harness.ts: the
 // returned `test` object registers fixtures on the runner instance it was
 // created from, which must be the consumer's own vitest. Inside this package
-// "vitest" is aliased to @voidzero-dev/vite-plus-test, so the package's own
+// "vitest" is pinned to the copy vite-plus/test re-exports, so the package's own
 // suite stays consistent while dist externalizes "vitest".
 import { test as base } from "vitest";
 

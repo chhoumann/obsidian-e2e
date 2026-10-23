@@ -7,7 +7,6 @@ export default defineConfig({
   pack: {
     clean: true,
     deps: {
-      neverBundle: ["vite-plus", "vite-plus/test", "@voidzero-dev/vite-plus-test"],
       onlyBundle: false,
     },
     dts: {
@@ -33,6 +32,13 @@ export default defineConfig({
       typeAware: true,
       typeCheck: true,
     },
+    overrides: [
+      {
+        // Tests run generated code the way Obsidian's CLI `eval` would.
+        files: ["tests/**"],
+        rules: { "no-eval": "off" },
+      },
+    ],
   },
   test: {
     fileParallelism: false,

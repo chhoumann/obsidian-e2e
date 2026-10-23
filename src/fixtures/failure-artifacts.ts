@@ -15,11 +15,14 @@ type GetSuiteHooks = (suite: Suite) => { afterEach: AfterEachHook[] };
 
 // Bind to the consumer's runner ("vitest"), like the hooks in plugin-harness.ts.
 // Vitest 4.1 exposes a suite's hooks as `TestRunner.getSuiteHooks`; older
-// versions only through "vitest/suite", which Vitest 5 removed.
+// versions only through "vitest/suite", which Vitest 5 removed. The specifier
+// is a variable so Vite does not try to resolve it when transforming this file.
+const legacySuiteModule = "vitest/suite";
 const runner = (vitest as unknown as { TestRunner?: { getSuiteHooks: GetSuiteHooks } }).TestRunner;
 const getSuiteHooks: GetSuiteHooks =
   runner?.getSuiteHooks ??
-  ((await import("vitest/suite")) as unknown as { getHooks: GetSuiteHooks }).getHooks;
+  ((await import(/* @vite-ignore */ legacySuiteModule)) as unknown as { getHooks: GetSuiteHooks })
+    .getHooks;
 
 /**
  * Runs `capture` once when the current test attempt fails, before the test's

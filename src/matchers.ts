@@ -1,6 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 
-import { expect } from "vite-plus/test";
+import { expect } from "vitest";
 
 import { parseNoteDocument } from "./note/document";
 import type {
@@ -213,8 +213,8 @@ expect.extend({
   },
 });
 
-declare module "vite-plus/test" {
-  interface Assertion<T = any> {
+declare module "vitest" {
+  interface Assertion<R, T> {
     toHaveActiveFile(path: string): Promise<T>;
     toHaveCommand(commandId: string): Promise<T>;
     toHaveEditorTextContaining(needle: string): Promise<T>;
@@ -242,8 +242,6 @@ declare module "vite-plus/test" {
     toHaveWorkspaceNode(label: string): void;
   }
 }
-
-export {};
 
 function hasWorkspaceNode(
   nodes: Awaited<ReturnType<ObsidianClient["workspace"]>>,
