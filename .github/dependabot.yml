@@ -1,0 +1,52 @@
+version: 2
+# Grouped weekly updates, after chhoumann/obsidian-plugin-workflows
+# templates/dependabot.yml. Grouping keeps the SHA pins and dependency tree
+# fresh in a small number of PRs rather than one-per-bump. The cooldown holds
+# back releases younger than 7 days, matching `minimumReleaseAge` in
+# pnpm-workspace.yaml: the window in which compromised publishes are usually
+# caught and pulled.
+updates:
+  # GitHub Actions across all workflows. Keeps SHA pins from rotting - a Node
+  # runtime deprecation slips in precisely when nothing watches these.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    cooldown:
+      default-days: 7
+    groups:
+      actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: ci
+    labels:
+      - dependencies
+      - github-actions
+
+  # Package dependencies (root package.json + lockfile). Releases are cut from
+  # changesets, so a production bump that should ship needs one added to its PR.
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 10
+    cooldown:
+      default-days: 7
+    groups:
+      # vite-plus, the `vite` alias to vite-plus-core and the pinned vitest
+      # must move together, along with the overrides in pnpm-workspace.yaml.
+      vite-plus:
+        patterns: ["vite-plus", "vite", "vitest"]
+      dev-dependencies:
+        dependency-type: development
+        update-types: ["minor", "patch"]
+      prod-dependencies:
+        dependency-type: production
+        update-types: ["minor", "patch"]
+    commit-message:
+      prefix: build
+      include: scope
+    labels:
+      - dependencies
