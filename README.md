@@ -896,12 +896,15 @@ At a high level:
   `.obsidian-e2e-artifacts` so maintainers can inspect the same failure
   snapshots produced locally.
 - Releases go through Changesets PRs. Merge the version PR that
-  Changesets opens, then let the release workflow publish to npm.
+  Changesets opens, and the release workflow stages the version on npm. It
+  goes public once a maintainer approves it with `npm stage approve
+  <stage-id>` (2FA).
 
 Maintainer setup notes:
 
 - Configure npm trusted publishing for this package and repository so the
-  GitHub release workflow can publish without a long-lived npm token.
+  GitHub release workflow can stage releases without a long-lived npm token.
+  Allow only `npm stage publish` on the trusted publisher, not `npm publish`.
 - Grant the publish job `id-token: write` so GitHub can mint the OIDC token npm
   expects, and keep the release workflow permissions aligned with the write
   actions it needs, such as `contents: write` and `pull-requests: write` for
