@@ -22,7 +22,7 @@ const config: ViteUserConfig = defineConfig({
     format: ["esm"],
     platform: "node",
     sourcemap: true,
-    target: ["node20.19"],
+    target: ["node22.12"],
   },
   lint: {
     options: {
