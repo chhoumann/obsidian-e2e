@@ -260,11 +260,8 @@ describe("createPluginHarness runner binding", () => {
 
     expect(bundled).toMatch(/import\s*\{[^}]*\bbeforeAll\b[^}]*\}\s*from\s*"vitest"/u);
     expect(bundled).toMatch(/import\s*\{[^}]*\btest\b[^}]*\}\s*from\s*"vitest"/u);
-    // Failure capture reads the runner's suite hooks from "vitest"; "vitest/suite"
-    // (removed in Vitest 5) is only a lazy fallback for Vitest before 4.1.
-    expect(bundled).toMatch(/import\s*\*\s*as\s*\w+\s*from\s*"vitest"/u);
-    expect(bundled).not.toMatch(/import\s*\{[^}]*\}\s*from\s*"vitest\/suite"/u);
-    expect(bundled).toMatch(/await import\((?:\s*\/\*[^*]*\*\/)?\s*"vitest\/suite"\s*\)/u);
+    expect(bundled).toMatch(/import\s*\{[^}]*\bTestRunner\b[^}]*\}\s*from\s*"vitest"/u);
+    expect(bundled).not.toMatch(/vitest\/suite/u);
     expect(bundled).not.toMatch(/function beforeAll\(/u);
     expect(bundled).not.toMatch(/from\s*"vite-plus\/test"/u);
   });

@@ -101,7 +101,7 @@ const SPECS: Record<string, Spec> = {
   probe: {},
 };
 
-export const CAPTURE_HELP = `obsidian-e2e capture <command>
+export const CAPTURE_HELP: string = `obsidian-e2e capture <command>
 
 Composable screenshot/recording primitives for a live Obsidian window over CDP.
 Every command prints a JSON result (verified sizes/durations) on stdout.

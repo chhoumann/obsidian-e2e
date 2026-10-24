@@ -71,8 +71,6 @@ export const executeCommand: CommandTransport = async ({
     stderrChunks.push(Buffer.from(chunk));
   });
 
-  // Executor form on purpose: `Promise.withResolvers` is ES2024/Node >= 22,
-  // and the package's engines floor is Node ^20.19.0.
   const exitCode = await new Promise<number>((resolve, reject) => {
     const timer = setTimeout(() => {
       child.kill("SIGTERM");

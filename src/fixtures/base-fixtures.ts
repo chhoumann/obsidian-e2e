@@ -14,6 +14,28 @@ export interface BaseFixtureState {
   _vaultLock: VaultRunLock | null;
 }
 
+type Use<T> = (value: T) => Promise<void>;
+
+interface BaseFixtures {
+  _vaultLock: [
+    (context: object, use: Use<VaultRunLock | null>) => Promise<void>,
+    { scope: "worker" },
+  ];
+  _testContext: (
+    context: Pick<BaseFixtureState & TestContext, "_vaultLock" | "task">,
+    use: Use<ObsidianTestContext>,
+  ) => Promise<void>;
+  obsidian: (
+    context: Pick<BaseFixtureState, "_testContext">,
+    use: Use<ObsidianClient>,
+  ) => Promise<void>;
+  sandbox: (
+    context: Pick<BaseFixtureState, "_testContext">,
+    use: Use<ObsidianTestContext["sandbox"]>,
+  ) => Promise<void>;
+  vault: (context: Pick<BaseFixtureState, "_testContext">, use: Use<VaultApi>) => Promise<void>;
+}
+
 interface BaseFixtureOptions {
   createVault?: (obsidian: ObsidianClient) => Promise<VaultApi> | VaultApi;
 }
@@ -21,14 +43,14 @@ interface BaseFixtureOptions {
 export function createBaseFixtures(
   options: CreateObsidianTestOptions,
   fixtureOptions: BaseFixtureOptions = {},
-) {
+): BaseFixtures {
   const createVault =
     fixtureOptions.createVault ?? ((obsidian: ObsidianClient) => createVaultApi({ obsidian }));
 
   return {
     _vaultLock: [
       // eslint-disable-next-line no-empty-pattern
-      async ({}, use: (vaultLock: VaultRunLock | null) => Promise<void>) => {
+      async ({}, use) => {
         if (!options.sharedVaultLock) {
           await use(null);
           return;
@@ -79,10 +101,7 @@ export function createBaseFixtures(
       },
       { scope: "worker" },
     ],
-    _testContext: async (
-      { _vaultLock, task }: Pick<BaseFixtureState & TestContext, "_vaultLock" | "task">,
-      use: (context: ObsidianTestContext) => Promise<void>,
-    ) => {
+    _testContext: async ({ _vaultLock, task }, use) => {
       const context = await createInternalTestContext({
         ...options,
         createVault,
@@ -100,23 +119,13 @@ export function createBaseFixtures(
         });
       }
     },
-    // oxlint-disable-next-line no-empty-pattern
-    obsidian: async (
-      { _testContext }: Pick<BaseFixtureState, "_testContext">,
-      use: (obsidian: ObsidianClient) => Promise<void>,
-    ) => {
+    obsidian: async ({ _testContext }, use) => {
       await use(_testContext.obsidian);
     },
-    sandbox: async (
-      { _testContext }: Pick<BaseFixtureState, "_testContext">,
-      use: (sandbox: ObsidianTestContext["sandbox"]) => Promise<void>,
-    ) => {
+    sandbox: async ({ _testContext }, use) => {
       await use(_testContext.sandbox);
     },
-    vault: async (
-      { _testContext }: Pick<BaseFixtureState, "_testContext">,
-      use: (vault: VaultApi) => Promise<void>,
-    ) => {
+    vault: async ({ _testContext }, use) => {
       await use(_testContext.vault);
     },
   };

@@ -81,12 +81,14 @@ interface Frame {
  * Build an ffconcat list giving every captured frame its real on-screen
  * duration, so the encoded video is wall-clock accurate however irregularly
  * frames arrived (idle stretches produce no frames; bursts produce many).
+ *
+ * @param minLastSeconds The final frame is held at least this long so very
+ * short takes still encode.
  */
 export function buildConcatList(
   frames: Frame[],
   startSeconds: number,
   stopSeconds: number,
-  /** The final frame is held at least this long so very short takes still encode. */
   minLastSeconds = 0,
 ): string {
   if (frames.length === 0) throw new Error("no frames to encode");

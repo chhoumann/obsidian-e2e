@@ -29,7 +29,9 @@ export function getClientInternals(client: ObsidianClient): ClientInternals {
   return internals;
 }
 
-export function createRestoreManager(readFile: (filePath: string) => Promise<string>) {
+export function createRestoreManager(
+  readFile: (filePath: string) => Promise<string>,
+): ClientInternals {
   const snapshots = new Map<string, SnapshotEntry>();
 
   return {

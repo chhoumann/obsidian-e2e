@@ -1,6 +1,6 @@
-import { defineConfig } from "vite-plus";
+import { defineConfig, type ViteUserConfig } from "vite-plus";
 
-export default defineConfig({
+const config: ViteUserConfig = defineConfig({
   staged: {
     "*": "vp check --fix",
   },
@@ -8,9 +8,6 @@ export default defineConfig({
     clean: true,
     deps: {
       onlyBundle: false,
-    },
-    dts: {
-      resolver: "tsc",
     },
     entry: [
       "src/index.ts",
@@ -25,7 +22,7 @@ export default defineConfig({
     format: ["esm"],
     platform: "node",
     sourcemap: true,
-    target: ["node20.19"],
+    target: ["node22.12"],
   },
   lint: {
     options: {
@@ -46,3 +43,5 @@ export default defineConfig({
     maxWorkers: 1,
   },
 });
+
+export default config;

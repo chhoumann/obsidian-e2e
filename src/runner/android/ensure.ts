@@ -28,7 +28,7 @@ import { CdpClient, type CdpDependencies } from "./cdp";
  * provisioning story - no first-run UI driving, no vault registry beyond this.
  * Verified against Obsidian mobile 1.13.8.
  */
-export const DEVICE_VAULT_ROOT = `/storage/emulated/0/Android/data/${OBSIDIAN_PACKAGE}/files`;
+export const DEVICE_VAULT_ROOT: string = `/storage/emulated/0/Android/data/${OBSIDIAN_PACKAGE}/files`;
 
 const SELECTED_VAULT_KEY = "mobile-selected-vault";
 const VAULT_OPEN_TIMEOUT_MS = 60_000;

@@ -29,7 +29,7 @@ export const TERM_POLL_MS = 100;
 // stableInstanceId in instance.ts). The trailing hash makes the dir name
 // globally unique and is the guard that stops us ever removing a non-instance
 // directory (the shared dev vault, another plugin's profile, `/tmp`, ...).
-export const INSTANCE_DIR_PATTERN = /-[0-9a-f]{12}$/;
+export const INSTANCE_DIR_PATTERN: RegExp = /-[0-9a-f]{12}$/;
 
 /**
  * Reap options plus the marker filename to check for orphan detection. The
@@ -164,7 +164,7 @@ function sleep(ms: number): Promise<void> {
 // rest of the tree (and never blocks the subsequent dir removal): ESRCH (already
 // exited between discovery and signalling), EPERM (a pid we no longer own - e.g.
 // recycled by a foreign process; skip rather than touch it), ENOENT (defensive).
-export const IGNORABLE_KILL_CODES = new Set(["ESRCH", "EPERM", "ENOENT"]);
+const IGNORABLE_KILL_CODES = new Set(["ESRCH", "EPERM", "ENOENT"]);
 
 function isIgnorableKillError(error: unknown): boolean {
   return [...IGNORABLE_KILL_CODES].some((code) => errorHasCode(error, code));
