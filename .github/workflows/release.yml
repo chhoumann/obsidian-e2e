@@ -17,7 +17,7 @@ jobs:
       pull-requests: write
 
     outputs:
-      hasChangesets: ${{ steps.changesets.outputs.hasChangesets }}
+      hasChangesets: ${{ steps.changesets.outputs.has-changesets }}
 
     steps:
       - name: Checkout
@@ -39,14 +39,12 @@ jobs:
 
       - name: Create release pull request
         id: changesets
-        uses: changesets/action@v1
+        uses: changesets/action@ae32849d5ba541f9ae29e40e22a623bc13562f51 # v2.1.2
         with:
-          commit: "chore: version packages"
-          createGithubReleases: false
-          title: "chore: version packages"
-          version: pnpm exec changeset version
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: "chore: version packages"
+          create-github-releases: false
+          pr-title: "chore: version packages"
+          version-script: pnpm exec changeset version
 
   publish:
     if: needs.changesets.outputs.hasChangesets == 'false'
