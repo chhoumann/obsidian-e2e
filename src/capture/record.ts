@@ -103,7 +103,9 @@ export function buildConcatList(
     lines.push(`file '${frame.file.replaceAll("'", "'\\''")}'`);
     lines.push(`duration ${Math.max(last ? minLastSeconds : 0.001, end - begin).toFixed(4)}`);
   });
-  // The concat demuxer ignores the last entry's duration unless it is repeated.
+  // ffmpeg times the final entry like the one before it, so repeating the last
+  // frame makes its duration count. The repeat itself runs past stop, so the
+  // caller must cut the input at stop (`-t`).
   lines.push(`file '${frames.at(-1)!.file.replaceAll("'", "'\\''")}'`);
   return `${lines.join("\n")}\n`;
 }
@@ -294,7 +296,16 @@ async function startScreencastCapture(
       const list = path.join(dir, "frames.ffconcat");
       await fs.writeFile(list, buildConcatList(kept, startSeconds, stopSeconds, 1 / fps));
       return {
-        inputArgs: ["-f", "concat", "-safe", "0", "-i", list],
+        inputArgs: [
+          "-f",
+          "concat",
+          "-safe",
+          "0",
+          "-t",
+          Math.max(stopSeconds - startSeconds, 1 / fps).toFixed(4),
+          "-i",
+          list,
+        ],
         startSeconds,
         stopSeconds,
         stats: {
