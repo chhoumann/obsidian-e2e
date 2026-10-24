@@ -13,7 +13,7 @@
     "url": "git+https://github.com/chhoumann/obsidian-e2e.git"
   },
   "bin": {
-    "obsidian-e2e": "./dist/runner/bin.mjs"
+    "obsidian-e2e": "dist/runner/bin.mjs"
   },
   "files": [
     "dist"
