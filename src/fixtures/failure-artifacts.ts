@@ -1,4 +1,5 @@
-import * as vitest from "vitest";
+// Bind to the consumer's runner ("vitest"), like the hooks in plugin-harness.ts.
+import { TestRunner } from "vitest";
 import type { TestContext } from "vitest";
 
 import {
@@ -9,20 +10,6 @@ import type { ObsidianClient, PluginHandle } from "../core/types";
 import type { CreateObsidianTestOptions } from "./types";
 
 type FailureContext = Pick<TestContext, "onTestFailed" | "onTestFinished" | "task">;
-type Suite = NonNullable<FailureContext["task"]["suite"]> | FailureContext["task"]["file"];
-type AfterEachHook = (context: Pick<TestContext, "task">) => unknown;
-type GetSuiteHooks = (suite: Suite) => { afterEach: AfterEachHook[] };
-
-// Bind to the consumer's runner ("vitest"), like the hooks in plugin-harness.ts.
-// Vitest 4.1 exposes a suite's hooks as `TestRunner.getSuiteHooks`; older
-// versions only through "vitest/suite", which Vitest 5 removed. The specifier
-// is a variable so Vite does not try to resolve it when transforming this file.
-const legacySuiteModule = "vitest/suite";
-const runner = (vitest as unknown as { TestRunner?: { getSuiteHooks: GetSuiteHooks } }).TestRunner;
-const getSuiteHooks: GetSuiteHooks =
-  runner?.getSuiteHooks ??
-  ((await import(/* @vite-ignore */ legacySuiteModule)) as unknown as { getHooks: GetSuiteHooks })
-    .getHooks;
 
 /**
  * Runs `capture` once when the current test attempt fails, before the test's
@@ -56,15 +43,15 @@ export function captureOnTestFailure(
     });
   };
 
+  const hooks = TestRunner.getSuiteHooks(test.suite ?? test.file).afterEach;
   // `expect.soft` failures mark the test failed without throwing, so read the
   // result rather than catching. Concurrent tests share the suite's hooks.
-  const captureIfFailed: AfterEachHook = async (hookContext) => {
+  const captureIfFailed: (typeof hooks)[number] = async (hookContext) => {
     if (hookContext.task === test && test.result?.state === "fail") {
       await captureOnce();
     }
   };
 
-  const hooks = getSuiteHooks(test.suite ?? test.file).afterEach;
   hooks.push(captureIfFailed);
   hooks.unshift(captureIfFailed);
   // Runs after the afterEach hooks, once per attempt; a retry runs beforeEach
