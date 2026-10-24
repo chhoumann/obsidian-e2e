@@ -82,8 +82,8 @@ interface Frame {
  * duration, so the encoded video is wall-clock accurate however irregularly
  * frames arrived (idle stretches produce no frames; bursts produce many).
  *
- * @param minLastSeconds The final frame is held at least this long so very
- * short takes still encode.
+ * @param minLastSeconds The final entry lasts at least this long so a take
+ * shorter than one output frame still yields a frame.
  */
 export function buildConcatList(
   frames: Frame[],
@@ -103,7 +103,9 @@ export function buildConcatList(
     lines.push(`file '${frame.file.replaceAll("'", "'\\''")}'`);
     lines.push(`duration ${Math.max(last ? minLastSeconds : 0.001, end - begin).toFixed(4)}`);
   });
-  // The concat demuxer ignores the last entry's duration unless it is repeated.
+  // ffmpeg 7+ times the final entry like the one before it, so repeating the
+  // last frame makes its duration count but holds it past stop. The caller
+  // trims the encoded output to the wall-clock length (`-t`).
   lines.push(`file '${frames.at(-1)!.file.replaceAll("'", "'\\''")}'`);
   return `${lines.join("\n")}\n`;
 }
@@ -173,7 +175,8 @@ const CURSOR_CSS =
 
 /** What a capture backend hands to the shared encode/verify step. */
 interface CapturedSource {
-  inputArgs: string[];
+  /** ffmpeg arguments placed before the encoder's: the input plus any output trim. */
+  sourceArgs: string[];
   startSeconds: number;
   stopSeconds: number;
   stats: Pick<
@@ -294,7 +297,16 @@ async function startScreencastCapture(
       const list = path.join(dir, "frames.ffconcat");
       await fs.writeFile(list, buildConcatList(kept, startSeconds, stopSeconds, 1 / fps));
       return {
-        inputArgs: ["-f", "concat", "-safe", "0", "-i", list],
+        sourceArgs: [
+          "-f",
+          "concat",
+          "-safe",
+          "0",
+          "-i",
+          list,
+          "-t",
+          Math.max(stopSeconds - startSeconds, 1 / fps).toFixed(4),
+        ],
         startSeconds,
         stopSeconds,
         stats: {
@@ -487,7 +499,7 @@ async function startX11Capture(
         );
       }
       return {
-        inputArgs: ["-i", file],
+        sourceArgs: ["-i", file],
         startSeconds: firstFrameAt!,
         stopSeconds,
         stats: {
@@ -669,7 +681,7 @@ export async function startRecording(
         staged = await stagePartial(output);
         await runTool(
           "ffmpeg",
-          ["-v", "error", "-y", ...source.inputArgs, ...encoderArgs(output, fps), staged.partial],
+          ["-v", "error", "-y", ...source.sourceArgs, ...encoderArgs(output, fps), staged.partial],
           stopOptions.signal,
         );
         const info = await probeMedia(staged.partial, stopOptions.signal);

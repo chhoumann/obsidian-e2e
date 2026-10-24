@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -584,6 +585,37 @@ describe("capture record", () => {
     );
     expect(leftovers).toEqual([]);
   }, 10_000);
+
+  test("a screencast take that ends on a still screen encodes to its wall-clock length", async () => {
+    const jpeg = (color: string) =>
+      execFileSync("ffmpeg", [
+        "-v",
+        "error",
+        "-f",
+        "lavfi",
+        "-i",
+        `color=${color}:s=64x64`,
+        "-frames:v",
+        "1",
+        "-f",
+        "mjpeg",
+        "-",
+      ]).toString("base64");
+    const fake = await fakeClient(() => ({ result: {} }));
+    const output = path.join(await createTempDir(tempDirectories, "capture-rec-"), "take.webm");
+    const recording = await startRecording(fake.client, output, { backend: "screencast" });
+    for (const color of ["red", "blue"]) {
+      fake.emit("Page.screencastFrame", {
+        sessionId: 1,
+        data: jpeg(color),
+        metadata: { timestamp: Date.now() / 1000 },
+      });
+      await new Promise((r) => setTimeout(r, 200));
+    }
+    await new Promise((r) => setTimeout(r, 1500));
+    const result = await recording.stop();
+    expect(Math.abs(result.durationSeconds! - result.wallSeconds)).toBeLessThan(0.2);
+  }, 20_000);
 
   test("only webm/mp4 outputs are accepted", () => {
     expect(encoderArgs("x.webm", 10)).toContain("libvpx-vp9");
