@@ -44,6 +44,18 @@ describe("buildEvalJsonCode executed", () => {
     expect(thrown).toBeInstanceOf(DevEvalError);
     expect((thrown as DevEvalError).message).toBe("Failed to evaluate Obsidian code: nope");
   });
+
+  it("keeps an own __proto__ key as data without touching any prototype", () => {
+    const value = evalGenerated<{ savedFeeds: Record<string, unknown> }>(
+      'JSON.parse(\'{"savedFeeds":{"__proto__":{"title":"__proto__"}}}\')',
+    );
+
+    expect(Object.getOwnPropertyDescriptor(value.savedFeeds, "__proto__")?.value).toEqual({
+      title: "__proto__",
+    });
+    expect(Object.getPrototypeOf(value.savedFeeds)).toBe(Object.prototype);
+    expect(({} as Record<string, unknown>).title).toBeUndefined();
+  });
 });
 
 // Regression for https://github.com/chhoumann/obsidian-e2e/issues/18 on the

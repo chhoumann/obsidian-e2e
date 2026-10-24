@@ -163,6 +163,37 @@ describe("runEvalJsonAsync", () => {
     await expect(runEvalJsonAsync(dev, "await Promise.resolve('polled')")).resolves.toBe("polled");
   });
 
+  it("resolves an own __proto__ key as data without touching any prototype", async () => {
+    const { dev } = createInAppEmulator();
+
+    const value = await runEvalJsonAsync<{ savedFeeds: Record<string, unknown> }>(
+      dev,
+      'JSON.parse(\'{"savedFeeds":{"__proto__":{"title":"__proto__"}}}\')',
+      { timeoutMs: 2_000 },
+    );
+
+    expect(Object.getOwnPropertyDescriptor(value.savedFeeds, "__proto__")?.value).toEqual({
+      title: "__proto__",
+    });
+    expect(Object.getPrototypeOf(value.savedFeeds)).toBe(Object.prototype);
+    expect(({} as Record<string, unknown>).title).toBeUndefined();
+  });
+
+  it("rethrows a poll that fails in-app instead of reporting the operation as pending", async () => {
+    const { dev } = createInAppEmulator(() => {
+      // A completed entry the poll read cannot serialize.
+      for (const entry of Object.values(registryEntries())) {
+        if (entry.state === "done")
+          Object.assign(entry, { envelope: { ok: true, value: new Map() } });
+      }
+      return undefined;
+    });
+
+    await expect(
+      runEvalJsonAsync(dev, "await Promise.resolve('done')", { timeoutMs: 2_000 }),
+    ).rejects.toThrowError(DevEvalError);
+  });
+
   it("fails with reason 'still-pending' when the promise never settles", async () => {
     const { dev } = createInAppEmulator();
 
