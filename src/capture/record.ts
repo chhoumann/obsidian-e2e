@@ -103,9 +103,9 @@ export function buildConcatList(
     lines.push(`file '${frame.file.replaceAll("'", "'\\''")}'`);
     lines.push(`duration ${Math.max(last ? minLastSeconds : 0.001, end - begin).toFixed(4)}`);
   });
-  // ffmpeg times the final entry like the one before it, so repeating the last
-  // frame makes its duration count. The repeat itself runs past stop, so the
-  // caller must cut the input at stop (`-t`).
+  // ffmpeg 7+ times the final entry like the one before it, so repeating the
+  // last frame makes its duration count but holds it past stop. The caller
+  // trims the encoded output to the wall-clock length (`-t`).
   lines.push(`file '${frames.at(-1)!.file.replaceAll("'", "'\\''")}'`);
   return `${lines.join("\n")}\n`;
 }
@@ -175,7 +175,8 @@ const CURSOR_CSS =
 
 /** What a capture backend hands to the shared encode/verify step. */
 interface CapturedSource {
-  inputArgs: string[];
+  /** ffmpeg arguments placed before the encoder's: the input plus any output trim. */
+  sourceArgs: string[];
   startSeconds: number;
   stopSeconds: number;
   stats: Pick<
@@ -296,15 +297,15 @@ async function startScreencastCapture(
       const list = path.join(dir, "frames.ffconcat");
       await fs.writeFile(list, buildConcatList(kept, startSeconds, stopSeconds, 1 / fps));
       return {
-        inputArgs: [
+        sourceArgs: [
           "-f",
           "concat",
           "-safe",
           "0",
-          "-t",
-          Math.max(stopSeconds - startSeconds, 1 / fps).toFixed(4),
           "-i",
           list,
+          "-t",
+          Math.max(stopSeconds - startSeconds, 1 / fps).toFixed(4),
         ],
         startSeconds,
         stopSeconds,
@@ -498,7 +499,7 @@ async function startX11Capture(
         );
       }
       return {
-        inputArgs: ["-i", file],
+        sourceArgs: ["-i", file],
         startSeconds: firstFrameAt!,
         stopSeconds,
         stats: {
@@ -680,7 +681,7 @@ export async function startRecording(
         staged = await stagePartial(output);
         await runTool(
           "ffmpeg",
-          ["-v", "error", "-y", ...source.inputArgs, ...encoderArgs(output, fps), staged.partial],
+          ["-v", "error", "-y", ...source.sourceArgs, ...encoderArgs(output, fps), staged.partial],
           stopOptions.signal,
         );
         const info = await probeMedia(staged.partial, stopOptions.signal);
