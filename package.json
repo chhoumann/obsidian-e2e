@@ -51,7 +51,7 @@
     "check": "vp check",
     "changeset": "changeset",
     "dev": "vp pack --watch",
-    "release": "changeset publish",
+    "release": "npm stage publish --provenance",
     "release:check": "vp check && vp test && vp pack",
     "test": "vp test",
     "typecheck": "tsc --noEmit",

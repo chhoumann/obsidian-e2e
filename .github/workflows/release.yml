@@ -76,5 +76,11 @@ jobs:
       - name: Validate release
         run: pnpm run release:check
 
-      - name: Publish to npm
-        run: pnpm run release
+      - name: Stage on npm
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          if [ -n "$(npm view "obsidian-e2e@$version" version 2>/dev/null)" ]; then
+            echo "obsidian-e2e@$version is already published"
+            exit 0
+          fi
+          pnpm run release
