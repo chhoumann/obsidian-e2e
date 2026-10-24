@@ -39,7 +39,7 @@ export function createPluginTest(options: CreatePluginTestOptions): PluginTest {
     },
   };
 
-  return base.extend<PluginFixtures & BaseFixtureState>(fixtures as never) as PluginTest;
+  return base.extend<PluginFixtures & BaseFixtureState>(fixtures);
 }
 
 async function applyVaultSeed(obsidian: ObsidianClient, seedVault: VaultSeed): Promise<void> {

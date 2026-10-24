@@ -18,7 +18,7 @@ import { isRecord } from "../core/errors";
  * it is below the plugin's `minAppVersion`, turning a false "missing API" e2e
  * signal into an explicit, actionable error.
  */
-export const OBSIDIAN_ASAR_VERSION_RE = /^obsidian-(\d+\.\d+\.\d+)\.asar$/;
+export const OBSIDIAN_ASAR_VERSION_RE: RegExp = /^obsidian-(\d+\.\d+\.\d+)\.asar$/;
 
 /** The newest valid cached asar in the config dir - the single seeding authority. */
 export interface CachedAsar {

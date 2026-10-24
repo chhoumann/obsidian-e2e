@@ -326,8 +326,11 @@ export type ScreenshotTarget =
   | { kind: "viewport" }
   | { kind: "selector"; selector: string }
   | { kind: "modal" }
-  /** Page expression returning `{x, y, width, height}` in CSS px (viewport-relative). */
-  | { kind: "rect"; expression: string };
+  | {
+      kind: "rect";
+      /** Page expression returning `{x, y, width, height}` in CSS px (viewport-relative). */
+      expression: string;
+    };
 
 export interface ScreenshotOptions {
   target?: ScreenshotTarget;

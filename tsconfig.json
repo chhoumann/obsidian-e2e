@@ -10,6 +10,7 @@
     "strict": true,
     "noUnusedLocals": true,
     "declaration": true,
+    "isolatedDeclarations": true,
     "emitDeclarationOnly": true,
     "esModuleInterop": true,
     "isolatedModules": true,
