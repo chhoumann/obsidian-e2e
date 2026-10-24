@@ -57,7 +57,8 @@ const EVAL_JSON_SERIALIZER = [
   "if(Array.isArray(value)){return value.map((item,index)=>__obsidianE2ESerialize(item,`${path}[${index}]`));}",
   "const prototype=Object.getPrototypeOf(value);",
   "if(prototype!==Object.prototype&&prototype!==null){throw new Error(`Cannot serialize non-plain object at ${path}.`);}",
-  "const next={};",
+  // A null prototype keeps an own `__proto__` key as data instead of a prototype swap.
+  "const next=Object.create(null);",
   "for(const [key,entry] of Object.entries(value)){next[key]=__obsidianE2ESerialize(entry,`${path}.${key}`);}",
   "return next;",
   "};",
@@ -240,6 +241,8 @@ export async function runEvalJsonAsync<T>(
         directCommandOptions(ASYNC_EVAL_COMMAND_TIMEOUT_MS),
       );
     } catch (error) {
+      // The read ran in-app and threw, so repeating it cannot succeed.
+      if (error instanceof DevEvalError) throw error;
       lastError = error;
       await pause();
       continue;
