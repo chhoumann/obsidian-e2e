@@ -82,8 +82,8 @@ interface Frame {
  * duration, so the encoded video is wall-clock accurate however irregularly
  * frames arrived (idle stretches produce no frames; bursts produce many).
  *
- * @param minLastSeconds The final frame is held at least this long so very
- * short takes still encode.
+ * @param minLastSeconds The final entry lasts at least this long so a take
+ * shorter than one output frame still yields a frame.
  */
 export function buildConcatList(
   frames: Frame[],
